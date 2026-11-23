@@ -10,7 +10,9 @@ import {createMailer} from '../mailer.js';
 
 // 极简假 SMTP 服务：AUTH LOGIN + DATA 抓取
 const received=[];
+const smtpSocks=new Set();
 const smtp=net.createServer((sock)=>{
+ smtpSocks.add(sock);sock.on('close',()=>smtpSocks.delete(sock));sock.on('error',()=>{});
  sock.setEncoding('utf8');
  let buf='', inData=false, dataLines=[], authed=false, stage='greet', user='';
  sock.write('220 fake.smtp ESMTP ready\r\n');
@@ -67,7 +69,13 @@ async function startWithRetry(attempts=3){
  throw last;
 }
 const S=await startWithRetry();
-after(()=>{S.child.kill();smtp.close();rmSync(S.dir,{recursive:true,force:true});});
+after(async()=>{
+ S.child.kill();
+ for(const sock of smtpSocks) sock.destroy();        // 关掉残留连接，避免 ECONNRESET 打进测试运行器
+ smtpSocks.clear();
+ await new Promise(res=>smtp.close(res));
+ rmSync(S.dir,{recursive:true,force:true});
+});
 
 test('smtpSend delivers a multipart message over AUTH LOGIN',async()=>{
  await smtpSend({host:'127.0.0.1',port:smtpPort,user:'orders@example.com',pass:'mailpass',from:'orders@example.com',fromName:'MERIDIAN',to:'buyer@example.com',subject:'Order MY123',text:'plain body',html:'<b>html body</b>'});
