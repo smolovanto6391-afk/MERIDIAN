@@ -2,7 +2,8 @@ import {defaults, digest, readiness, methods, validateConfig, createCheckout, ca
 import http from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
 import { randomBytes, timingSafeEqual, scryptSync, createHash, createCipheriv, createDecipheriv } from 'node:crypto';
-import { createMailer, orderEmail } from './mailer.js';
+import { createMailer, orderEmail, quoteEmail } from './mailer.js';
+import { cleanOptions, cleanTiers, cleanEngraving, cleanEngraveText, resolveSelections, engravingFor, priceFor, configCode, imagePathOK, OPT_LIMITS } from './options.js';
 import { mkdirSync, readFileSync, writeFileSync, statSync } from 'node:fs';
 import { resolve, extname, join } from 'node:path';
 import { brotliCompressSync, gzipSync, constants as zconstants } from 'node:zlib';
@@ -153,6 +154,7 @@ try{
 db.exec("CREATE TABLE IF NOT EXISTS events (ts TEXT NOT NULL, day TEXT NOT NULL, hour INTEGER NOT NULL, kind TEXT NOT NULL, ref TEXT NOT NULL DEFAULT '', vid TEXT NOT NULL DEFAULT '', source TEXT NOT NULL DEFAULT ''); CREATE INDEX IF NOT EXISTS events_lookup ON events(day,kind);");
 db.exec('CREATE TABLE IF NOT EXISTS mail_config (id INTEGER PRIMARY KEY, value TEXT NOT NULL);');
 db.exec("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);");
+db.exec("CREATE TABLE IF NOT EXISTS quotes (id TEXT PRIMARY KEY, created TEXT NOT NULL, details TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'new');");
 const getSetting=(k)=>{try{return db.prepare('SELECT value FROM settings WHERE key=?').get(k)?.value||'';}catch{return '';}};
 const setSetting=(k,v)=>{db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(k,v);};
 const adminPassOk=(pw)=>typeof pw==='string'&&pw.length>0&&timingSafeEqual(scryptSync(pw,salt,64),hash);
@@ -263,7 +265,7 @@ const content=(field)=>{
  if(!Array.isArray(c.pages))c.pages=seed.pages;
  if(!Array.isArray(c.categories))c.categories=seed.categories;
  c.customizerFee=Number.isFinite(Number(raw.customizerFee))?Math.min(500,Math.max(0,Number(raw.customizerFee))):25;
-c.products=(Array.isArray(c.products)?c.products:[]).map(p=>({...p,badge:typeof p.badge==='string'?p.badge:'',specs:p.specs&&typeof p.specs==='object'&&!Array.isArray(p.specs)?p.specs:{},images:Array.isArray(p.images)&&p.images.length?p.images:(p.image?[p.image]:[]),description:typeof p.description==='string'?p.description:'',active:p.active!==false,customizer:cleanCustomizer(p.customizer)}));
+c.products=(Array.isArray(c.products)?c.products:[]).map(p=>({...p,badge:typeof p.badge==='string'?p.badge:'',specs:p.specs&&typeof p.specs==='object'&&!Array.isArray(p.specs)?p.specs:{},images:Array.isArray(p.images)&&p.images.length?p.images:(p.image?[p.image]:[]),description:typeof p.description==='string'?p.description:'',active:p.active!==false,customizer:cleanCustomizer(p.customizer),options:cleanOptions(p.options),tiers:cleanTiers(p.tiers),engraving:cleanEngraving(p.engraving)}));
  c.whatsapp={...whatsappDefaults,...raw.whatsapp,messages:{...whatsappDefaults.messages,...raw.whatsapp?.messages}};
  contentCache.set(field,{rev:contentRev,value:c});
  return structuredClone(c);
@@ -327,6 +329,24 @@ function queueOrderMail(order,accessToken){
    .catch(e=>markOrderMail(order.id,'failed',e.message));
  }catch(e){markOrderMail(order.id,'failed',e.message);}
 }
+// —— 询价单通知（不进入支付流程）——
+function queueQuoteMail(quote){
+ const patch=(status,error)=>{try{const row=db.prepare('SELECT details FROM quotes WHERE id=?').get(quote.id);if(!row)return;const d=JSON.parse(row.details)||{};d.mail={status,at:new Date().toISOString(),...(error?{error:String(error).slice(0,200)}:{})};db.prepare('UPDATE quotes SET details=? WHERE id=?').run(JSON.stringify(d),quote.id);}catch{}};
+ const mail=currentMailer();
+ if(!mail.enabled)return patch('disabled');
+ try{
+  const brand=content('published').brand||'MERIDIAN';
+  const settings=mailSettings();
+  const msg=quoteEmail({quote,brand,siteUrl:publicBase});
+  const to=[...String(settings.notifyEmail||process.env.ORDER_NOTIFY_EMAIL||'').split(',').map(s=>s.trim()).filter(Boolean)];
+  if(!to.length&&quote.email)to.push(quote.email);
+  if(!to.length)return patch('disabled');
+  patch('queued');
+  Promise.allSettled(to.map(t=>mail.send({to:t,subject:msg.subject,html:msg.html,text:msg.text})))
+   .then(rs=>{const bad=rs.filter(r=>r.status==='rejected');patch(bad.length?'failed':'sent',bad.length?bad[0].reason?.message:'');})
+   .catch(e=>patch('failed',e.message));
+ }catch(e){patch('failed',e.message);}
+}
 function validate(c){
  if(!c||typeof c!=='object'||!Array.isArray(c.products)||!Array.isArray(c.categories)||!Array.isArray(c.sections)) throw Error('内容格式错误');
  for(const key of ['brand','announcement','title','subtitle','eyebrow','heroImage','accent']) if(typeof c[key]!=='string') throw Error('页面字段不完整');
@@ -368,6 +388,43 @@ function validate(c){
   if(p.specs!==undefined){
    if(!p.specs||typeof p.specs!=='object'||Array.isArray(p.specs))throw Error('商品规格格式错误');
    for(const [k,v] of Object.entries(p.specs)){if(!['caseSize','movement','waterResistance','lugWidth','crystal','weight','caseMaterial','strapMaterial'].includes(k))throw Error('未知的规格字段：'+k);if(typeof v!=='string'||v.length>120)throw Error('规格内容过长');}
+  }
+  if(p.options!==undefined){
+   if(!Array.isArray(p.options)||p.options.length>OPT_LIMITS.groups)throw Error('选项组最多 '+OPT_LIMITS.groups+' 组');
+   const keys=new Set();
+   for(const g of p.options){
+    if(!g||typeof g.key!=='string'||!/^[a-z0-9_-]{1,20}$/.test(g.key)||keys.has(g.key))throw Error('选项组标识需为小写字母/数字，且不能重复');
+    keys.add(g.key);
+    if(typeof g.label!=='string'||!g.label.trim()||g.label.length>OPT_LIMITS.label)throw Error('选项组名称不能为空，最多 '+OPT_LIMITS.label+' 字');
+    if(!Array.isArray(g.values)||!g.values.length||g.values.length>OPT_LIMITS.values)throw Error('每组选项需 1–'+OPT_LIMITS.values+' 个值');
+    const ids=new Set();
+    for(const v of g.values){
+     if(!v||typeof v.id!=='string'||!/^[a-z0-9_-]{1,24}$/.test(v.id)||ids.has(v.id))throw Error('选项值标识不合法或重复');
+     ids.add(v.id);
+     if(typeof v.label!=='string'||!v.label.trim()||v.label.length>OPT_LIMITS.label)throw Error('选项值名称不能为空，最多 '+OPT_LIMITS.label+' 字');
+     const dlt=Number(v.delta||0);if(!Number.isFinite(dlt)||dlt<0||dlt>OPT_LIMITS.delta)throw Error('选项加价需在 0–'+OPT_LIMITS.delta+' 之间');
+     if(v.image!==undefined&&v.image!==''&&!imagePathOK(v.image))throw Error('选项图片须为 HTTPS 或站内路径');
+     if(v.swatch!==undefined&&v.swatch!==''&&!/^#[0-9a-f]{6}$/i.test(v.swatch))throw Error('色块需为六位十六进制颜色');
+    }
+   }
+  }
+  if(p.tiers!==undefined){
+   if(!Array.isArray(p.tiers)||p.tiers.length>OPT_LIMITS.tiers)throw Error('数量优惠最多 '+OPT_LIMITS.tiers+' 档');
+   const mins=new Set();
+   for(const t of p.tiers){
+    const q=Number(t&&t.qtyMin),o=Number(t&&t.offPct);
+    if(!Number.isInteger(q)||q<2||q>100000||mins.has(q))throw Error('数量优惠的门槛需为 ≥2 的整数且不重复');
+    mins.add(q);
+    if(!Number.isFinite(o)||o<=0||o>90)throw Error('数量优惠折扣需在 1–90% 之间');
+   }
+  }
+  if(p.engraving!==undefined){
+   const e=p.engraving;
+   if(!e||typeof e!=='object'||Array.isArray(e))throw Error('刻字配置格式错误');
+   if(e.enabled!==undefined&&typeof e.enabled!=='boolean')throw Error('刻字开关格式错误');
+   const fee=Number(e.fee||0);if(!Number.isFinite(fee)||fee<0||fee>OPT_LIMITS.engFee)throw Error('刻字费用需在 0–'+OPT_LIMITS.engFee+' 之间');
+   const mc=Number(e.maxChars||10);if(!Number.isInteger(mc)||mc<1||mc>OPT_LIMITS.engChars)throw Error('刻字字数上限需在 1–'+OPT_LIMITS.engChars+' 之间');
+   if(e.perUnit!==undefined&&typeof e.perUnit!=='boolean')throw Error('刻字计费方式格式错误');
   }
  }
  return c;
@@ -413,7 +470,7 @@ const json=(res,status,data)=>{res.setHeader('Cache-Control','no-store');return 
 async function body(req,limit=2e6){let str='';for await(const chunk of req){str+=chunk;if(Buffer.byteLength(str)>limit) throw Error('请求过大');}return JSON.parse(str||'{}');}
 const auth=(req)=>{const token=(req.headers.cookie||'').split(';').map(s=>s.trim()).find(s=>s.startsWith('session='))?.slice(8);return token&&sessions.get(token)>Date.now();};
 const attempts=new Map();
-const lookups=new Map();
+const lookups=new Map();const quoteHits=new Map();
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const hostOnly=h=>{const v=String(h||'').split(',')[0].trim().toLowerCase();return /^[a-z0-9.-]+(:\d+)?$/.test(v)?v:''};
 // 反向代理（Nginx/Caddy/1Panel）后 Host 与 X-Forwarded-Host 不一致时，origin 校验会误判 403
@@ -538,6 +595,18 @@ const server=http.createServer(async(req,res)=>{
   if(url.pathname==='/api/logout'&&req.method==='POST'){const token=(req.headers.cookie||'').match(/(?:^|;\s*)session=([^;]+)/)?.[1];sessions.delete(token);res.setHeader('Set-Cookie','session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0');return json(res,200,{ok:true});}
   if(url.pathname.startsWith('/api/admin')){
    if(!auth(req))return json(res,401,{error:'请先登录后台'});
+   if(url.pathname==='/api/admin/quotes'&&req.method==='GET'){
+    const rows=db.prepare('SELECT id,created,details,status FROM quotes ORDER BY created DESC LIMIT 100').all();
+    return json(res,200,rows.map(r=>{let d={};try{d=JSON.parse(r.details)||{};}catch{}return {id:r.id,created:r.created,status:r.status,...d};}));
+   }
+   if(url.pathname.startsWith('/api/admin/quotes/')&&req.method==='PUT'){
+    const id=decodeURIComponent(url.pathname.slice('/api/admin/quotes/'.length));
+    const b=await body(req);
+    const st=['new','quoted','won','closed'].includes(b.status)?b.status:null;
+    if(!st)return json(res,400,{error:'状态只能是 new / quoted / won / closed'});
+    const r=db.prepare('UPDATE quotes SET status=? WHERE id=?').run(st,id);
+    return json(res,r.changes?200:404,r.changes?{ok:true,status:st}:{error:'询价单不存在'});
+   }
    if(url.pathname==='/api/admin/account'&&req.method==='GET')return json(res,200,{passwordSource:getSetting('admin_password')?'database':'env',sessionHours:ADMIN_TTL/3600000,rememberDays:ADMIN_REMEMBER/86400000});
    if(url.pathname==='/api/admin/password'&&req.method==='POST'){
     const b=await body(req);
@@ -845,7 +914,7 @@ const server=http.createServer(async(req,res)=>{
    const rows=db.prepare('SELECT id,created,details FROM orders WHERE customer_id=? ORDER BY created DESC LIMIT 30').all(v.id);
    const mine=rows.map(r=>{
     let d;try{d=JSON.parse(r.details)||{};}catch{return null;}
-    return {id:r.id,created:r.created,status:d.status,total:d.total,shipping:d.shipping,currency:'USD',items:(d.items||[]).map(i=>({name:i.name,quantity:i.quantity,price:i.price,fee:i.fee||0,image:i.image||null,...(i.artwork?{artwork:i.artwork}:{})})),paymentPolicy:d.paymentPolicy||'',tracking:d.tracking||null,address:{name:d.name||'',line1:d.address||'',line2:d.address2||'',city:d.city||'',state:d.state||'',postalCode:d.postalCode||'',countryName:d.countryName||d.country||''}};
+    return {id:r.id,created:r.created,status:d.status,total:d.total,shipping:d.shipping,currency:'USD',items:(d.items||[]).map(i=>({name:i.name,quantity:i.quantity,price:i.price,unitPrice:i.unitPrice??i.price,fee:i.fee||0,image:i.image||null,config:i.config||'',...(Array.isArray(i.options)&&i.options.length?{options:i.options.map(o=>({label:o.label,valueLabel:o.valueLabel,delta:o.delta}))}:{}),...(i.engraving&&i.engraving.text?{engraving:{text:i.engraving.text,fee:i.engraving.fee||0}}:{}),...(i.artwork?{artwork:i.artwork}:{})})),paymentPolicy:d.paymentPolicy||'',tracking:d.tracking||null,address:{name:d.name||'',line1:d.address||'',line2:d.address2||'',city:d.city||'',state:d.state||'',postalCode:d.postalCode||'',countryName:d.countryName||d.country||''}};
    }).filter(Boolean);
    return json(res,200,{orders:mine});
   }
@@ -869,6 +938,27 @@ const server=http.createServer(async(req,res)=>{
    db.prepare('UPDATE orders SET details=?,customer_id=? WHERE id=?').run(JSON.stringify(d),v.id,row.id);
    return json(res,200,{ok:true,id:row.id});
   }
+  // —— 询价（不建订单、不占库存、不走支付）——
+  if(url.pathname==='/api/quote'&&req.method==='POST'){
+   const ip=clientIP(req),now=Date.now(),q=quoteHits.get(ip)||{n:0,t:now};
+   if(now-q.t>3600000){q.n=0;q.t=now;}
+   if(q.n>=10)return json(res,429,{error:'询价提交过于频繁，请一小时后再试'});
+   const b=await body(req);
+   if(typeof b.email!=='string'||!/^\S+@\S+\.\S+$/.test(b.email.trim()))throw Error('请填写有效的邮箱地址');
+   const p=content('published').products.find(x=>x.id===String(b.productId||'')&&x.active);
+   if(!p)return json(res,404,{error:'商品不存在或已下架'});
+   const qty=Math.round(Number(b.quantity)||0);
+   if(!Number.isInteger(qty)||qty<1||qty>100000)throw Error('询价数量需为 1–100000 的整数');
+   const sel=resolveSelections(p,b.options);
+   const eng=engravingFor(p,b.engraving);
+   const priced=priceFor(p,{quantity:qty,selections:sel,engraving:eng,customizerFee:0});
+   const details={productId:p.id,productName:p.name,email:String(b.email).trim().slice(0,200),name:String(b.name||'').slice(0,120),phone:String(b.phone||'').slice(0,60),company:String(b.company||'').slice(0,120),country:String(b.country||'').slice(0,60),quantity:qty,options:sel,engraving:eng||null,note:String(b.note||'').slice(0,1000),currency:'USD',unitEstimate:priced.unitCents/100,estimate:Number(((priced.unitCents*qty+priced.engraveFeeCents)/100).toFixed(2)),config:configCode(sel,{engraving:eng?eng.text:'',artwork:false}),source:String(sourceOf(req)).slice(0,40)};
+   const id='RFQ'+Date.now()+randomBytes(3).toString('hex');
+   db.prepare('INSERT INTO quotes (id,created,details,status) VALUES (?,?,?,?)').run(id,new Date().toISOString(),JSON.stringify(details),'new');
+   q.n++;quoteHits.set(ip,q);
+   queueQuoteMail({id,...details});
+   return json(res,201,{id,estimate:details.estimate,currency:'USD',config:details.config});
+  }
   if(url.pathname==='/api/orders/lookup'&&req.method==='GET'){
    const email=String(url.searchParams.get('email')||'').trim().toLowerCase();
    const ref=String(url.searchParams.get('id')||'').trim();
@@ -877,7 +967,7 @@ const server=http.createServer(async(req,res)=>{
    const hit=db.prepare('SELECT id,created,details FROM orders WHERE id=? COLLATE NOCASE').get(ref);
    let d=null;try{d=hit?JSON.parse(hit.details)||{}:null;}catch{}
    if(!hit||!d||String(d.email||'').toLowerCase()!==email)return json(res,404,{error:'没有找到匹配的订单，请核对邮箱和订单号'});
-   return json(res,200,{id:hit.id,created:hit.created,status:d.status,total:d.total,shipping:d.shipping,currency:'USD',items:(d.items||[]).map(i=>({name:i.name,quantity:i.quantity,price:i.price,fee:i.fee||0,image:i.image||null,...(i.artwork?{artwork:i.artwork}:{})})),countryName:d.countryName||d.country,tracking:d.tracking||null});
+   return json(res,200,{id:hit.id,created:hit.created,status:d.status,total:d.total,shipping:d.shipping,currency:'USD',items:(d.items||[]).map(i=>({name:i.name,quantity:i.quantity,price:i.price,unitPrice:i.unitPrice??i.price,fee:i.fee||0,image:i.image||null,config:i.config||'',...(Array.isArray(i.options)&&i.options.length?{options:i.options.map(o=>({label:o.label,valueLabel:o.valueLabel,delta:o.delta}))}:{}),...(i.engraving&&i.engraving.text?{engraving:{text:i.engraving.text,fee:i.engraving.fee||0}}:{}),...(i.artwork?{artwork:i.artwork}:{})})),countryName:d.countryName||d.country,tracking:d.tracking||null});
   }
   if(url.pathname.startsWith('/api/products/')&&req.method==='GET'){
    const id=decodeURIComponent(url.pathname.slice('/api/products/'.length));
@@ -897,14 +987,27 @@ const server=http.createServer(async(req,res)=>{
    if(!b.name?.trim()||!b.phone?.trim()||!b.address?.trim()||!Array.isArray(b.items)||!b.items.length||b.items.length>100)return json(res,400,{error:'Please complete your shipping information and select a product'});
    if([b.name,b.phone,b.address].some(x=>typeof x!=='string'||x.length>500))throw Error('Shipping information is too long');
    const c=content('published'),draft=content('draft'),seen=new Set();let total=0,hasVipItem=false;
-   const viewer=viewerFromReq(req),catMap=categoryAccessMap(c);const items=b.items.map(i=>{const p=c.products.find(p=>p.id===i.id&&p.active);if(seen.has(i.id)||!p||!Number.isInteger(i.quantity)||i.quantity<1||i.quantity>p.stock)throw Error('A product is unavailable or has insufficient stock. Please refresh and try again.');const itemAccess=effectiveAccess(p,catMap);if(!canView(itemAccess,viewer))throw Error('该商品仅限指定等级会员购买，请登录相应等级账号');if(itemAccess==='vip')hasVipItem=true;seen.add(i.id);total+=Math.round(p.price*100)*i.quantity;p.stock-=i.quantity;const d=draft.products.find(x=>x.id===p.id);if(d)d.stock=Math.max(0,d.stock-i.quantity);const art=i.artwork&&typeof i.artwork==='object'?i.artwork:null;
+   const viewer=viewerFromReq(req),catMap=categoryAccessMap(c);const codes=[];const items=b.items.map(i=>{const p=c.products.find(p=>p.id===i.id&&p.active);if(seen.has(i.id)||!p||!Number.isInteger(i.quantity)||i.quantity<1||i.quantity>p.stock)throw Error('A product is unavailable or has insufficient stock. Please refresh and try again.');const itemAccess=effectiveAccess(p,catMap);if(!canView(itemAccess,viewer))throw Error('该商品仅限指定等级会员购买，请登录相应等级账号');if(itemAccess==='vip')hasVipItem=true;seen.add(i.id);const art=i.artwork&&typeof i.artwork==='object'?i.artwork:null;
   const artURL=art&&typeof art.url==='string'&&/^\/uploads\/[a-f0-9]{32}\.png$/.test(art.url)?art.url:null;
   const clamp=(v,d,lo,hi)=>{const n=Number(v);return Number.isFinite(n)?Math.min(hi,Math.max(lo,n)):d;};
   const prevURL=art&&typeof art.preview==='string'&&/^\/uploads\/[a-f0-9]{32}\.png$/.test(art.preview)?art.preview:null;
+  // 选项 / 刻字 全部按服务端配置校验并计价，客户端传来的加价一律忽略
+  const sel=resolveSelections(p,i.options);
+  const eng=engravingFor(p,i.engraving);
   const feeD=artURL?(Number(c.customizerFee)||0):0;
-  total+=Math.round(feeD*100)*i.quantity;
-  return{id:p.id,name:p.name,price:p.price,quantity:i.quantity,fee:feeD,...(artURL?{artwork:{url:artURL,x:clamp(art.x,50,0,100),y:clamp(art.y,50,0,100),size:clamp(art.size,34,5,120),rot:clamp(art.rot,0,-45,45),...(prevURL?{preview:prevURL}:{})}}:{})};});
-   const shipRule=cleanShipping(shippingConfig());const shipping=shippingCents(total,shipRule);const details={note:String(b.note||'').slice(0,500),shippingRule:shipRule,...(customerFromReq(req)?{customerId:customerFromReq(req).id}:{}),paymentPolicy:PAYMENT_RULES_OFF?null:((hasVipItem||(viewer&&viewer.level==='vip'))?'usdt':'paypal'),country:String(b.country||'').toUpperCase().slice(0,100),countryName:(byCode(b.country)||{}).name||'',city:String(b.city||'').slice(0,80),state:String(b.state||'').slice(0,60),postalCode:String(b.postalCode||'').slice(0,40),address2:String(b.address2||'').slice(0,200),email:String(b.email||'').slice(0,200),currency:'USD',name:b.name.trim(),phone:b.phone.trim(),address:b.address.trim(),items,total:(total+shipping)/100,shipping:shipping/100,status:'Awaiting confirmation — unpaid'};const id='MY'+Date.now()+randomBytes(3).toString('hex');
+  const priced=priceFor(p,{quantity:i.quantity,selections:sel,artwork:artURL||null,engraving:eng,customizerFee:feeD});
+  total+=priced.totalCents;
+  p.stock-=i.quantity;const d=draft.products.find(x=>x.id===p.id);if(d)d.stock=Math.max(0,d.stock-i.quantity);
+  const code=configCode(sel,{engraving:priced.engraveText,artwork:Boolean(artURL)});codes.push(code);
+  return{id:p.id,name:p.name,price:p.price,quantity:i.quantity,fee:feeD,unitPrice:(priced.unitCents+priced.artworkCents)/100,
+   ...(priced.optionCents?{optionFee:priced.optionCents/100}:{}),
+   ...(priced.tierOffPct?{tierOffPct:priced.tierOffPct,discount:((priced.baseCents+priced.optionCents-priced.unitCents)/100)*i.quantity}:{}),
+   ...(sel.length?{options:sel.map(s=>({key:s.key,label:s.label,value:s.value,valueLabel:s.valueLabel,delta:s.delta,...(s.image?{image:s.image}:{})}))}:{}),
+   ...(priced.engraveText?{engraving:{text:priced.engraveText,fee:priced.engraveFeeCents/100,perUnit:Boolean(p.engraving&&p.engraving.perUnit)}}:{}),
+   config:code,
+   image:(sel.find(s=>s.image)||{}).image||p.image||null,
+   ...(artURL?{artwork:{url:artURL,x:clamp(art.x,50,0,100),y:clamp(art.y,50,0,100),size:clamp(art.size,34,5,120),rot:clamp(art.rot,0,-45,45),...(prevURL?{preview:prevURL}:{})}}:{})};});
+   const shipRule=cleanShipping(shippingConfig());const shipping=shippingCents(total,shipRule);const details={note:String(b.note||'').slice(0,500),shippingRule:shipRule,...(customerFromReq(req)?{customerId:customerFromReq(req).id}:{}),paymentPolicy:PAYMENT_RULES_OFF?null:((hasVipItem||(viewer&&viewer.level==='vip'))?'usdt':'paypal'),country:String(b.country||'').toUpperCase().slice(0,100),countryName:(byCode(b.country)||{}).name||'',city:String(b.city||'').slice(0,80),state:String(b.state||'').slice(0,60),postalCode:String(b.postalCode||'').slice(0,40),address2:String(b.address2||'').slice(0,200),email:String(b.email||'').slice(0,200),currency:'USD',name:b.name.trim(),phone:b.phone.trim(),address:b.address.trim(),items,total:(total+shipping)/100,shipping:shipping/100,config:codes.filter(Boolean).join(' + ').slice(0,200),status:'Awaiting confirmation — unpaid'};const id='MY'+Date.now()+randomBytes(3).toString('hex');
    const accessToken=randomBytes(32).toString('hex');
    db.exec('BEGIN');try{save('published',c);save('draft',draft);db.prepare('INSERT INTO orders (id,created,details,email,customer_id) VALUES (?,?,?,?,?)').run(id,new Date().toISOString(),JSON.stringify(details),String(details.email||'').toLowerCase(),details.customerId||null);db.prepare('INSERT INTO order_access VALUES (?,?)').run(id,digest(accessToken));db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}queueOrderMail({id,...details},accessToken);return json(res,201,{id,...details,accessToken});
   }

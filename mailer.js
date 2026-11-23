@@ -63,7 +63,12 @@ export function createMailer(env = process.env, fetchImpl = fetch) {
 export function orderEmail({ order, accessToken, brand = 'MERIDIAN', siteUrl = '', whatsapp = '' }) {
   const details = order.details || order;
   const items = Array.isArray(details.items) ? details.items : [];
-  const rows = items.map((i) => `<tr><td style="padding:10px 0;border-bottom:1px solid #eee">${esc(i.name)}<br><span style="color:#868686;font-size:12px">× ${i.quantity} · ${money(i.price)} each${Number(i.fee||0)>0?` <span style="color:#868686;font-size:12px">(+ ${money(Number(i.fee))} custom dial)</span>`:''}</span>${i.artwork?`<br><span style="color:#868686;font-size:12px">Custom dial ${i.artwork.preview?'mock-up':'artwork'}: ${i.artwork.preview?`<br><img src="${esc(i.artwork.preview)}" alt="Custom dial mock-up" style="width:160px;border:1px solid #eee;border-radius:6px;margin-top:6px">`:''}<br><a href="${esc(i.artwork.preview||i.artwork.url)}">${esc(i.artwork.preview||i.artwork.url)}</a></span>`:''}</td><td align="right" style="padding:10px 0;border-bottom:1px solid #eee">${money(i.price * i.quantity)}</td></tr>`).join('');
+  const optLine = (i) => (Array.isArray(i.options) && i.options.length)
+    ? `<br><span style="color:#868686;font-size:12px">${i.options.map((o) => `${esc(o.label)}: ${esc(o.valueLabel)}${Number(o.delta) > 0 ? ` (+${money(Number(o.delta))})` : ''}`).join(' · ')}</span>` : '';
+  const engLine = (i) => (i.engraving && i.engraving.text)
+    ? `<br><span style="color:#868686;font-size:12px">Engraving “${esc(i.engraving.text)}” (+${money(Number(i.engraving.fee || 0))}${i.engraving.perUnit ? ' / unit' : ' one-time'})</span>` : '';
+  const cfgLine = (i) => (i.config ? `<br><span style="color:#b0aca6;font-size:11px;letter-spacing:.08em">CFG ${esc(i.config)}</span>` : '');
+  const rows = items.map((i) => `<tr><td style="padding:10px 0;border-bottom:1px solid #eee">${esc(i.name)}<br><span style="color:#868686;font-size:12px">× ${i.quantity} · ${money(i.unitPrice ?? i.price)} each${Number(i.fee||0)>0?` <span style="color:#868686;font-size:12px">(+ ${money(Number(i.fee))} custom dial)</span>`:''}</span>${optLine(i)}${engLine(i)}${cfgLine(i)}${i.artwork?`<br><span style="color:#868686;font-size:12px">Custom dial ${i.artwork.preview?'mock-up':'artwork'}: ${i.artwork.preview?`<br><img src="${esc(i.artwork.preview)}" alt="Custom dial mock-up" style="width:160px;border:1px solid #eee;border-radius:6px;margin-top:6px">`:''}<br><a href="${esc(i.artwork.preview||i.artwork.url)}">${esc(i.artwork.preview||i.artwork.url)}</a></span>`:''}</td><td align="right" style="padding:10px 0;border-bottom:1px solid #eee">${money((i.unitPrice ?? i.price) * i.quantity)}</td></tr>`).join('');
   const payUrl = siteUrl && accessToken ? `${siteUrl}/?order=${encodeURIComponent(order.id)}&token=${encodeURIComponent(accessToken)}` : '';
   const subject = `订单已收到 ${order.id} · ${brand}`;
   const html = `<!doctype html><html><body style="margin:0;background:#f6f5f3;font-family:Georgia,serif;color:#333">
@@ -88,7 +93,12 @@ ${details.note?`<div style="margin:0 0 18px;padding:12px 14px;background:#f7f5f0
     `${brand} — 感谢您的订单`,
     `订单号: ${order.id}`,
     '',
-    ...items.map((i) => `${i.name} × ${i.quantity} — ${money(i.price * i.quantity)}${i.artwork ? ` · artwork ${i.artwork.preview||i.artwork.url}` : ''}`),
+    ...items.map((i) => [
+      `${i.name} × ${i.quantity} — ${money((i.unitPrice ?? i.price) * i.quantity)}${i.artwork ? ` · artwork ${i.artwork.preview||i.artwork.url}` : ''}`,
+      ...(Array.isArray(i.options) ? i.options.map((o) => `  ${o.label}: ${o.valueLabel}${Number(o.delta) > 0 ? ` (+${money(Number(o.delta))})` : ''}`) : []),
+      ...(i.engraving && i.engraving.text ? [`  Engraving: "${i.engraving.text}" (+${money(Number(i.engraving.fee || 0))})`] : []),
+      ...(i.config ? [`  CFG ${i.config}`] : []),
+    ]).flat(),
     `小计: ${money(details.total - (details.shipping || 0))}`,
     `运费: ${details.shipping ? money(details.shipping) : '免运费'}`,
     `合计: ${money(details.total)} USD`,
@@ -96,6 +106,51 @@ ${details.note?`<div style="margin:0 0 18px;padding:12px 14px;background:#f7f5f0
     details.note?`客户留言: ${details.note}`:'',
     `${details.name} / ${details.address} / ${details.postalCode} ${details.country} / ${details.phone}`,
     payUrl ? `查看订单: ${payUrl}` : '',
+  ].filter(Boolean).join('\n');
+  return { subject, html, text };
+}
+
+// 询价单通知（商家 + 抄送客户确认）
+export function quoteEmail({ quote, brand = 'MERIDIAN', siteUrl = '' }) {
+  const q = quote || {};
+  const opts = Array.isArray(q.options) ? q.options : [];
+  const cfgRow = (label, value) => (value === undefined || value === null || value === '' ? '' :
+    `<tr><td style="padding:4px 12px 4px 0;color:#868686;font-size:13px;white-space:nowrap">${esc(label)}</td><td style="padding:4px 0;font-size:13px">${esc(value)}</td></tr>`);
+  const subject = `询价 ${q.id} · ${q.productName || ''} · ${q.quantity || 1} pcs · ${brand}`;
+  const html = `<!doctype html><html><body style="margin:0;background:#f6f5f3;font-family:Georgia,serif;color:#333">
+<div style="max-width:600px;margin:0 auto;background:#fff;padding:36px">
+  <p style="font-family:Arial,sans-serif;font-size:11px;letter-spacing:.28em;text-transform:uppercase;color:#868686;margin:0 0 18px">${esc(brand)} · Quotation request</p>
+  <h1 style="font-family:Arial,sans-serif;font-weight:300;font-size:24px;margin:0 0 6px">新的定制询价</h1>
+  <p style="margin:0 0 22px;color:#666">询价单号 <strong>${esc(q.id)}</strong>${q.config ? ` · 配置 <strong>${esc(q.config)}</strong>` : ''}</p>
+  <table width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 20px;border-top:1px solid #eee;border-bottom:1px solid #eee;padding:10px 0">
+    ${cfgRow('产品', q.productName)}
+    ${cfgRow('数量', q.quantity)}
+    ${opts.map((o) => cfgRow(o.label, `${o.valueLabel}${Number(o.delta) > 0 ? ` (+${money(Number(o.delta))})` : ''}`)).join('')}
+    ${cfgRow('刻字', q.engraving && q.engraving.text ? q.engraving.text : '')}
+    ${cfgRow('单件估价', q.unitEstimate !== undefined ? `${money(Number(q.unitEstimate))} (未含折扣)` : '')}
+    ${cfgRow('合计估价', q.estimate !== undefined ? `${money(Number(q.estimate))} USD` : '')}
+  </table>
+  <h2 style="font-family:Arial,sans-serif;font-size:13px;letter-spacing:.16em;text-transform:uppercase;margin:0 0 8px">联系方式</h2>
+  <p style="margin:0 0 18px;color:#555;font-size:14px;line-height:1.7">${esc(q.name || '—')}${q.company ? ` · ${esc(q.company)}` : ''}<br>${esc(q.email)}${q.phone ? `<br>${esc(q.phone)}` : ''}${q.country ? `<br>${esc(q.country)}` : ''}</p>
+  ${q.note ? `<div style="padding:12px 14px;background:#f7f5f0;border-left:3px solid #111;font-size:13px;line-height:1.6"><strong style="display:block;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#868686;margin-bottom:4px">需求说明</strong>${esc(q.note)}</div>` : ''}
+  <p style="color:#868686;font-size:12px;line-height:1.7;margin:22px 0 0">这是询价，不是订单：未占用库存，也未收款。回复此邮件即可报价。</p>
+</div>
+<p style="max-width:600px;margin:14px auto 0;text-align:center;color:#9b9b9b;font-size:11px;font-family:Arial,sans-serif">© ${new Date().getFullYear()} ${esc(brand)}</p>
+</body></html>`;
+  const text = [
+    `${brand} — 新的定制询价`,
+    `询价单号: ${q.id}`,
+    `产品: ${q.productName || ''} × ${q.quantity || 1}`,
+    ...opts.map((o) => `  ${o.label}: ${o.valueLabel}${Number(o.delta) > 0 ? ` (+${money(Number(o.delta))})` : ''}`),
+    q.engraving && q.engraving.text ? `刻字: ${q.engraving.text}` : '',
+    q.estimate !== undefined ? `合计估价: ${money(Number(q.estimate))} USD` : '',
+    q.config ? `配置: ${q.config}` : '',
+    '',
+    `客户: ${q.name || '—'}${q.company ? ` / ${q.company}` : ''}`,
+    `邮箱: ${q.email}`,
+    q.phone ? `电话: ${q.phone}` : '',
+    q.note ? `需求: ${q.note}` : '',
+    siteUrl ? `后台: ${siteUrl}/admin` : '',
   ].filter(Boolean).join('\n');
   return { subject, html, text };
 }

@@ -444,3 +444,51 @@ body.has-cookie{padding-bottom:92px}
 .ord-note{margin:10px 0 0;padding:10px 12px;border-left:3px solid var(--accent);background:#fbfaf7}
 .ord-note strong{display:block;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:4px}
 .ord-note p{margin:0;font-size:13px;line-height:1.5}
+
+/* ---------- 定制配置器（选项组 / 刻字 / 配置编码 / 询价） ---------- */
+.button.ghost{color:var(--accent);background:transparent;border-color:transparent;text-decoration:underline;text-underline-offset:4px;min-height:0;padding:6px 0;font-size:11px;letter-spacing:.4px}
+.button.ghost:hover{background:transparent;filter:none;opacity:.7}
+.cfg{margin:18px 0 22px;border-top:1px solid var(--line);padding-top:18px}
+.cfg-group{margin-bottom:16px}
+.cfg-head{display:flex;align-items:baseline;justify-content:space-between;font-size:10px;letter-spacing:1.6px;text-transform:uppercase;color:#6f776d;margin-bottom:9px}
+.cfg-head em{font-style:normal;font-size:9px;letter-spacing:1px;color:#a39c8e}
+.cfg-values{display:flex;flex-wrap:wrap;gap:8px}
+.cfg-chip{display:flex;align-items:center;gap:8px;border:1px solid var(--line);background:#fff;padding:8px 12px;font-size:12px;line-height:1;transition:.18s}
+.cfg-chip:hover{border-color:#b9c0b2}
+.cfg-chip.on{background:#f2efe4;border-color:#8b8574;box-shadow:inset 0 0 0 1px #8b8574}
+.cfg-chip small{color:var(--muted);font-size:10px;letter-spacing:.2px}
+.cfg-dot{width:16px;height:16px;border-radius:50%;background-size:cover;background-position:center;border:1px solid #0002;flex:none}
+.cfg-engrave{border:1px solid var(--line);background:#fff;padding:12px 14px;margin-bottom:14px}
+.cfg-engrave .check{margin:0;font-size:12px;flex-direction:row;align-items:center;gap:9px}
+.cfg-engrave .check small{color:var(--muted);font-size:11px;margin-left:auto}
+.eng-body{margin-top:10px}
+.eng-body input{width:100%;text-transform:uppercase;letter-spacing:2px}
+.eng-body small{display:block;margin-top:6px}
+.cfg-tier{font-size:11px;color:#6d7a66;background:#eef1e6;padding:8px 12px;margin:0 0 12px}
+.cfg-code{display:flex;align-items:center;gap:10px;font-size:10px;letter-spacing:1.2px;text-transform:uppercase;color:#8a8f84;flex-wrap:wrap}
+.cfg-code code{font:600 11px/1 'DM Mono',ui-monospace,monospace;letter-spacing:1.5px;color:var(--accent);background:#eeece2;padding:6px 9px}
+.cfg-code .link{font-size:10px;letter-spacing:1px;text-transform:uppercase;text-decoration:underline;text-underline-offset:3px;color:#6d7a66}
+.cfg-unit-note{font-size:10px;letter-spacing:.6px;color:var(--muted);font-weight:400}
+.cart-opts{font-size:11px;color:var(--muted);margin:-4px 0 8px;line-height:1.6}
+@media(max-width:760px){.cfg-chip{flex:1 1 45%}}
+
+/* 后台：选项组编辑器 */
+.opt-group{border:1px solid var(--line);background:#fafbf8;padding:14px;margin-bottom:12px}
+.opt-group-head{display:flex;gap:10px;align-items:flex-end;margin-bottom:10px;flex-wrap:wrap}
+.opt-group-head label{flex:1;min-width:120px;margin:0}
+.opt-row{display:grid;grid-template-columns:1fr 1fr 1.4fr 90px 32px;gap:8px;align-items:end;margin-bottom:8px}
+.opt-row label{margin:0}
+.opt-row label span{font-size:10px;color:var(--muted)}
+.opt-row button{height:38px;border:1px solid var(--line);background:#fff;color:#8e4b3f}
+.opt-add{margin-top:4px;font-size:11px;border:1px dashed #c7cbc0;padding:8px 12px;width:100%;color:#6d7a66}
+.tier-row{display:grid;grid-template-columns:1fr 1fr 32px;gap:8px;align-items:end;margin-bottom:8px}
+.tier-row label{margin:0}
+.tier-row button{height:38px;border:1px solid var(--line);background:#fff;color:#8e4b3f}
+.quote-card{border:1px solid var(--line);background:#fff;padding:16px 18px;margin-bottom:12px}
+.quote-card header{display:flex;justify-content:space-between;gap:12px;align-items:baseline;border:0;padding:0;margin-bottom:8px}
+.quote-card h3{margin:0;font-size:14px}
+.quote-card .qmeta{font-size:11px;color:var(--muted);line-height:1.7}
+.quote-card .qopts{font-size:11px;color:#4d564c;margin:6px 0}
+.quote-card .qstatus{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
+.quote-card .qstatus button{border:1px solid var(--line);padding:5px 10px;font-size:11px;background:#fff}
+.quote-card .qstatus button.on{background:var(--accent);color:#fff;border-color:var(--accent)}

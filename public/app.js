@@ -4,6 +4,12 @@ const paymentText={en:{payment:'Payment',payWith:'Choose how to pay',payNotice:'
 const linkText={en:{linkTitle:'Already ordered as a guest?',linkHelp:'Enter the order number from your confirmation email to add that order to this account.',linkBtn:'Link this order',linkOk:'Order linked'},de:{linkTitle:'Bereits als Gast bestellt?',linkHelp:'Geben Sie die Bestellnummer aus Ihrer Bestätigungsmail ein, um die Bestellung diesem Konto zuzuordnen.',linkBtn:'Bestellung verknüpfen',linkOk:'Bestellung verknüpft'},es:{linkTitle:'¿Ya pediste como invitado?',linkHelp:'Introduce el número de pedido de tu email de confirmación para añadirlo a esta cuenta.',linkBtn:'Vincular pedido',linkOk:'Pedido vinculado'}};
 for(const l of ['en','de','es'])Object.assign(dictionaries[l],linkText[l]);
 for(const l of ['en','de','es']){Object.assign(dictionaries[l],paymentText[l]);dictionaries[l].notice=paymentText[l].payNotice;dictionaries[l].submit={en:'Create order & choose payment',de:'Bestellen und Zahlungsart wählen',es:'Crear pedido y elegir pago'}[l];}
+const cfgText={
+ en:{quoteBtn:'Request a quotation',quoteTitle:'Request a quotation',quoteQty:'Quantity',quoteSend:'Send request',quoteThank:'Request received',quoteRef:'Reference',estimate:'Estimated total',quoteNotOrder:'This is a quotation request — nothing is charged and no stock is reserved.',quoteHint:'Dial colour, engraving text, delivery deadline…',engLabel:'Engraving',cfgRequired:'Required',cfgCode:'Configuration code',cfgCopy:'Copy',cfgInclude:'incl. options'},
+ de:{quoteBtn:'Angebot anfragen',quoteTitle:'Angebot anfragen',quoteQty:'Menge',quoteSend:'Anfrage senden',quoteThank:'Anfrage erhalten',quoteRef:'Referenz',estimate:'Geschätzter Betrag',quoteNotOrder:'Dies ist eine Angebotsanfrage — keine Zahlung, keine Reservierung.',quoteHint:'Zifferblattfarbe, Gravurtext, Liefertermin…',engLabel:'Gravur',cfgRequired:'Pflicht',cfgCode:'Konfigurationscode',cfgCopy:'Kopieren',cfgInclude:'inkl. Optionen'},
+ es:{quoteBtn:'Solicitar presupuesto',quoteTitle:'Solicitar presupuesto',quoteQty:'Cantidad',quoteSend:'Enviar solicitud',quoteThank:'Solicitud recibida',quoteRef:'Referencia',estimate:'Total estimado',quoteNotOrder:'Es una solicitud de presupuesto: no se cobra ni se reserva stock.',quoteHint:'Color de esfera, texto grabado, plazo de entrega…',engLabel:'Grabado',cfgRequired:'Obligatorio',cfgCode:'Código de configuración',cfgCopy:'Copiar',cfgInclude:'incl. opciones'}
+};
+for(const l of ['en','de','es'])Object.assign(dictionaries[l],cfgText[l]);
 const contactText={en:'Chat with us',de:'Kontakt aufnehmen',es:'Chatea con nosotros'};
 
 const payIcons={
@@ -145,6 +151,87 @@ const artOf=id=>art[id]||null;
 const czFee=()=>Number(store.customizerFee||0);
 const lineFee=p=>artOf(p.id)?czFee():0;
 
+// —— 定制配置（选项组 / 数量阶梯 / 表背刻字）：前端只做展示与预估，实际计价由服务端重算 ——
+let sel={},eng={};
+try{sel=JSON.parse(localStorage.getItem('meridian-sel')||'{}');if(!sel||Array.isArray(sel)||typeof sel!=='object')sel={};}catch{sel={}}
+try{eng=JSON.parse(localStorage.getItem('meridian-eng')||'{}');if(!eng||Array.isArray(eng)||typeof eng!=='object')eng={};}catch{eng={}}
+const persistSel=()=>{try{localStorage.setItem('meridian-sel',JSON.stringify(sel));localStorage.setItem('meridian-eng',JSON.stringify(eng));}catch{}};
+const hasOptions=p=>Array.isArray(p.options)&&p.options.length>0;
+const engCfg=p=>(p.engraving&&p.engraving.enabled)?p.engraving:null;
+const pickedOptions=p=>{
+ const out=[];
+ for(const g of (p.options||[])){
+  const cur=(sel[p.id]||{})[g.key];
+  const v=(g.values||[]).find(x=>x.id===cur)||(g.values||[]).find(x=>x.default)||(g.required===false?null:(g.values||[])[0]);
+  if(v)out.push({...v,key:g.key,label:g.labelZh||g.label,value:v.id,valueLabel:v.labelZh||v.label});
+ }
+ return out;
+};
+const tierAt=(p,qty)=>{let best=null;for(const t of (p.tiers||[]))if(qty>=t.qtyMin&&(!best||t.qtyMin>best.qtyMin))best=t;return best;};
+const qtyOf=id=>Math.max(1,Number(cart[id]||1));
+// 单件到手价：基础价 + 选项加价，再按数量阶梯打折（不含刻字与图案加价）
+function unitPrice(p,qty=qtyOf(p.id)){
+ const extra=pickedOptions(p).reduce((a,o)=>a+Number(o.delta||0),0);
+ const t=tierAt(p,qty);
+ return Math.round((Number(p.price||0)+extra)*(1-(t?t.offPct:0)/100)*100)/100;
+}
+function engFeeOf(p,qty=qtyOf(p.id)){
+ const e=engCfg(p),txt=((eng[p.id]||{}).text||'').trim();
+ if(!e||!txt)return 0;
+ return Number(e.fee||0)*(e.perUnit?qty:1);
+}
+const engTextOf=p=>((eng[p.id]||{}).text||'').trim();
+const configOf=p=>{const parts=pickedOptions(p).map(o=>String(o.value).toUpperCase());if(engTextOf(p))parts.push('ENG');if(artOf(p.id))parts.push('ART');return parts.join('/')||'STD';};
+
+function configPanel(p){
+ const opts=hasOptions(p),e=engCfg(p),cfg=configOf(p);
+ const groups=opts?`<div class="cfg-groups">${p.options.map(g=>{const cur=(pickedOptions(p).find(o=>o.key===g.key)||{}).value;
+  return `<div class="cfg-group"><div class="cfg-head"><span>${esc(g.labelZh||g.label)}</span>${g.required===false?'':'<em>必选</em>'}</div><div class="cfg-values">${g.values.map(v=>{
+   const on=cur===v.id, bg=v.swatch?`background:${esc(v.swatch)}`:v.image?`background-image:url('${esc(v.image)}')`:'';
+   return `<button type="button" class="cfg-chip${on?' on':''}${v.swatch||v.image?' has-dot':''}" data-opt="${esc(g.key)}" data-val="${esc(v.id)}" aria-pressed="${on}">${v.swatch||v.image?`<i class="cfg-dot" style="${bg}"></i>`:''}<span>${esc(v.labelZh||v.label)}</span>${Number(v.delta)>0?`<small>+${money(Number(v.delta))}</small>`:''}</button>`;}).join('')}</div></div>`;}).join('')}</div>`:'';
+ const engraving=e?`<div class="cfg-engrave"><label class="check"><input type="checkbox" id="eng-on" ${((eng[p.id]||{}).on)?'checked':''}> ${esc(e.labelZh||e.label)} <small>+${money(Number(e.fee||0))}${e.perUnit?' / 件':'（一次性）'}</small></label><div class="eng-body" ${((eng[p.id]||{}).on)?'':'hidden'}><input id="eng-text" maxlength="${Number(e.maxChars)||10}" placeholder="最多 ${Number(e.maxChars)||10} 个字符" value="${esc((eng[p.id]||{}).text||'')}"><small class="muted">激光蚀刻在表背，最多 ${Number(e.maxChars)||10} 个字符</small></div></div>`:'';
+ const tiers=(Array.isArray(p.tiers)&&p.tiers.length)?`<p class="cfg-tier">${p.tiers.map(t=>`买 ${t.qtyMin} 件以上立减 ${t.offPct}%`).join(' · ')}</p>`:'';
+ return `<div class="cfg" id="cfg">${groups}${engraving}${tiers}<div class="cfg-code"><span>配置编码</span><code id="cfg-code">${esc(cfg)}</code><button type="button" class="link" id="cfg-copy">复制</button></div></div>`;
+}
+function paintPrice(p){
+ const el=$('#detail-price');if(!el)return;
+ const u=unitPrice(p,1),base=Number(p.price||0);
+ const tier=tierAt(p,1);
+ const cmp=Number(p.compareAt||0)>base?`<s>${money(p.compareAt)}</s> `:'';
+ el.innerHTML=`${cmp}${money(u)}${u!==base?` <small class="cfg-unit-note">含选项加价</small>`:''}${engCfg(p)&&engTextOf(p)?` <small class="cfg-unit-note">+ 刻字 ${money(engFeeOf(p,1))}</small>`:''}`;
+ const code=$('#cfg-code');if(code)code.textContent=configOf(p);
+}
+function wireConfig(p){
+ document.querySelectorAll('[data-opt]').forEach(b=>b.onclick=()=>{
+  const k=b.dataset.opt,v=b.dataset.val;
+  sel[p.id]=({...sel[p.id],...(b.dataset.opt?{[k]:v}:{})});
+  persistSel();
+  const g=(p.options||[]).find(x=>x.key===k),val=(g.values||[]).find(x=>x.id===v);
+  if(val&&val.image){const img=$('#detail-image');if(img){img.src=val.image;img.dataset.opt='1';}}
+  document.querySelectorAll(`[data-opt="${CSS.escape(k)}"]`).forEach(x=>{x.classList.toggle('on',x.dataset.val===v);x.setAttribute('aria-pressed',x.dataset.val===v);});
+  paintPrice(p);
+ });
+ const on=$('#eng-on'),txt=$('#eng-text'),body=document.querySelector('.eng-body');
+ if(on)on.onchange=()=>{eng[p.id]={on:on.checked,text:(eng[p.id]||{}).text||''};if(body)body.hidden=!on.checked;persistSel();paintPrice(p);};
+ if(txt)txt.oninput=()=>{eng[p.id]={on:true,text:txt.value.slice(0,(engCfg(p)||{}).maxChars||10)};persistSel();paintPrice(p);};
+ const cp=$('#cfg-copy');
+ if(cp)cp.onclick=async()=>{try{await navigator.clipboard.writeText(configOf(p));toast(t('copied'));}catch{toast(configOf(p));}};
+ const qb=$('#detail-quote');if(qb)qb.onclick=()=>quoteModal(p);
+}
+function quoteModal(p){
+ const form=`<h2>${t('quoteTitle')}</h2><p class="muted small">${esc(localized(p,'name'))} · ${esc(configOf(p))}</p><form id="quote-form"><label>${t('email')}<input name="email" type="email" required maxlength="200"></label><label>${t('name')}<input name="name" maxlength="120"></label><label>${t('phone')}<input name="phone" type="tel" maxlength="60"></label><label>${t('quoteQty')}<input name="quantity" type="number" min="1" max="100000" value="10" required></label><label>${t('orderNote')}<textarea name="note" rows="3" maxlength="1000" placeholder="${t('quoteHint')}"></textarea></label><button class="button full">${t('quoteSend')}</button><p class="form-error" role="alert"></p></form>`;
+ show(form);
+ $('#quote-form').onsubmit=async e=>{
+  e.preventDefault();const btn=e.target.querySelector('button');btn.disabled=true;
+  try{
+   const values=Object.fromEntries(new FormData(e.target));
+   const r=await api('/api/quote',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...values,quantity:Number(values.quantity)||1,productId:p.id,options:pickedOptions(p).map(o=>({key:o.key,value:o.value})),engraving:engTextOf(p)?{text:engTextOf(p)}:null})});
+   show(`<h2>${t('quoteThank')}</h2><p class="muted">${t('quoteRef')} <strong>${esc(r.id)}</strong></p><div class="totals"><p>${t('estimate')} <strong>${money(Number(r.estimate||0))}</strong></p><p class="muted small">${t('quoteNotOrder')}</p></div><button class="button full" id="quote-close">${t('close')}</button>`);
+   $('#quote-close').onclick=()=>modal.close();
+  }catch(err){$('.form-error').textContent=err.message;btn.disabled=false;}
+ };
+}
+
 function customizerPanel(p){
  const a=artOf(p.id);
  return `<section class="czr" id="czr">
@@ -268,13 +355,15 @@ function detail(id){
  const czr=!!(p.customizer&&p.customizer.enabled);
  document.title=localized(p,'name')+' — '+store.brand;
  const media=gallery.length?`<button class="detail-main" data-zoom aria-label="${t('zoom')}"><img id="detail-image" src="${esc(gallery[0])}" decoding="async" alt="${esc(localized(p,'name'))}"><span class="zoom-hint">${t('zoom')} ＋</span></button>`:`<div class="detail-main img-placeholder">${esc((localized(p,'name')||'M').slice(0,1).toUpperCase())}</div>`;
- show(`<div class="detail"><div class="detail-media"><div class="stage${czr?' has-czr':''}">${media}<img id="art-layer" class="art-layer" alt="" hidden><span id="art-handle" class="art-handle" hidden aria-hidden="true"></span></div>${gallery.length>1?`<div class="thumbs">${gallery.map((u,i)=>`<button data-thumb="${i}" class="${i===0?'active':''}" aria-label="${i+1}"><img src="${esc(u)}" alt="" loading="lazy" decoding="async"></button>`).join('')}</div>`:''}${czr?customizerPanel(p):''}</div><div><p class="eyebrow">MERIDIAN SELECTION</p><h2>${esc(localized(p,'name'))}</h2><h3 class="detail-price">${Number(p.compareAt||0)>Number(p.price)?`<s>${money(p.compareAt)}</s> ${money(p.price)} <span class="off">-${Math.round((1-p.price/p.compareAt)*100)}%</span>`:money(p.price)}</h3><p class="description">${esc(localized(p,'description'))}</p>${p.specs&&Object.values(p.specs).some(Boolean)?`<table class="specs"><tbody>${Object.entries(p.specs).filter(([,v])=>v&&String(v).trim()).map(([k,v])=>`<tr><th>${esc(specLabel(k))}</th><td>${esc(v)}</td></tr>`).join('')}</tbody></table>`:''}<p class="stock-line">${t('stock')}: ${p.stock} · USD</p><div class="detail-actions"><button class="button" id="detail-buy" ${p.stock?'':'disabled'}>${p.stock?t('buyNow'):t('out')}</button><button class="button outline" id="detail-add" ${p.stock?'':'disabled'}>${p.stock?t('add'):t('out')}</button></div><p class="muted small">${t('guestNote')}</p></div></div>`);
+ show(`<div class="detail"><div class="detail-media"><div class="stage${czr?' has-czr':''}">${media}<img id="art-layer" class="art-layer" alt="" hidden><span id="art-handle" class="art-handle" hidden aria-hidden="true"></span></div>${gallery.length>1?`<div class="thumbs">${gallery.map((u,i)=>`<button data-thumb="${i}" class="${i===0?'active':''}" aria-label="${i+1}"><img src="${esc(u)}" alt="" loading="lazy" decoding="async"></button>`).join('')}</div>`:''}${czr?customizerPanel(p):''}</div><div><p class="eyebrow">MERIDIAN SELECTION</p><h2>${esc(localized(p,'name'))}</h2><h3 class="detail-price" id="detail-price">${Number(p.compareAt||0)>Number(p.price)?`<s>${money(p.compareAt)}</s> ${money(unitPrice(p,1))} <span class="off">-${Math.round((1-p.price/p.compareAt)*100)}%</span>`:money(unitPrice(p,1))}</h3>${(hasOptions(p)||engCfg(p))?configPanel(p):''}<p class="description">${esc(localized(p,'description'))}</p>${p.specs&&Object.values(p.specs).some(Boolean)?`<table class="specs"><tbody>${Object.entries(p.specs).filter(([,v])=>v&&String(v).trim()).map(([k,v])=>`<tr><th>${esc(specLabel(k))}</th><td>${esc(v)}</td></tr>`).join('')}</tbody></table>`:''}<p class="stock-line">${t('stock')}: ${p.stock} · USD</p><div class="detail-actions"><button class="button" id="detail-buy" ${p.stock?'':'disabled'}>${p.stock?t('buyNow'):t('out')}</button><button class="button outline" id="detail-add" ${p.stock?'':'disabled'}>${p.stock?t('add'):t('out')}</button><button class="button ghost full" id="detail-quote">${t('quoteBtn')}</button></div><p class="muted small">${t('guestNote')}</p></div></div>`);
  let current=0;const main=$('#detail-image');
  document.querySelectorAll('[data-thumb]').forEach(b=>b.onclick=()=>{current=+b.dataset.thumb;if(main)main.src=gallery[current];document.querySelectorAll('[data-thumb]').forEach(x=>x.classList.toggle('active',x===b));});
  const zb=$('[data-zoom]');if(zb)zb.onclick=()=>openLightbox(gallery,current);
  $('#detail-add').onclick=()=>add(id);
  $('#detail-buy').onclick=async()=>{if(art[id]&&!art[id].preview)await ensurePreview(store.products.find(x=>x.id===id));buyNow=[{id,quantity:1}];checkout();};
  if(czr){paintArt(p);wireCustomizer(p);}
+ const selImg=(pickedOptions(p).find(o=>o.image)||{}).image;if(selImg&&main)main.src=selImg;
+ if(hasOptions(p)||engCfg(p))wireConfig(p);
 }
 async function authScreen(mode='login'){
  const title=mode==='login'?t('loginTitle'):t('registerTitle');
@@ -336,7 +425,7 @@ async function renderPayPage(){
   </div>
   <aside class="pay-summary">
    <h3>${t('orderSummary')}</h3>
-   <ul class="pay-items">${(s.items||[]).map(i=>`<li>${i.artwork?`<img class="pay-art" src="${esc(i.artwork.preview||i.artwork.url)}" alt="">`:''}<span>${esc(i.name)} × ${i.quantity}${i.artwork?` <small class="pay-art-tag">${t('czrBadge')}</small>`:''}</span><span>${money(Number(i.price)*Number(i.quantity))}</span></li>`).join('')}</ul>
+   <ul class="pay-items">${(s.items||[]).map(i=>`<li>${i.artwork?`<img class="pay-art" src="${esc(i.artwork.preview||i.artwork.url)}" alt="">`:''}<span>${esc(i.name)} × ${i.quantity}${i.artwork?` <small class="pay-art-tag">${t('czrBadge')}</small>`:''}${Array.isArray(i.options)&&i.options.length?` <small class="pay-art-tag">${i.options.map(o=>esc(o.valueLabel)).join(' · ')}</small>`:''}${i.engraving&&i.engraving.text?` <small class="pay-art-tag">${t('engLabel')}: ${esc(i.engraving.text)}</small>`:''}</span><span>${money(Number(i.unitPrice ?? i.price)*Number(i.quantity))}${i.engraving&&i.engraving.text?` <small class="pay-art-tag">+${money(Number(i.engraving.fee||0))}</small>`:''}</span></li>`).join('')}</ul>
    <div class="cs-row"><span>${t('goodsTotal')}</span><span>${money(goods)}</span></div>
    ${feeSum>0?`<div class="cs-row"><span>${t('czrFeeLabel')}</span><span>${money(feeSum)}</span></div>`:''}
    <div class="cs-row"><span>${t('delivery')}</span><span>${ship?money(ship):t('free')}</span></div>
@@ -429,7 +518,7 @@ function renderAccountPage(){
   const dt=new Date(o.created).toLocaleDateString(lang==='de'?'de-DE':lang==='es'?'es-ES':'en-US');
   const tr=o.tracking;
   const link=trkLink(tr);
-  const items=(o.items||[]).map(i=>`<li><span>${esc(i.name)} × ${i.quantity}${Number(i.fee||0)>0?` <span class="cz-fee">+ ${money(Number(i.fee))} ${t('czrFeeLabel')}</span>`:''}${i.artwork?` <a class="acct-art" href="${esc(i.artwork.preview||i.artwork.url)}" target="_blank" rel="noopener"><img src="${esc(i.artwork.preview||i.artwork.url)}" alt="">${t('czrBadge')}</a>`:''}</span><span>${money(i.price*i.quantity)}</span></li>`).join('');
+  const items=(o.items||[]).map(i=>`<li><span>${esc(i.name)} × ${i.quantity}${Number(i.fee||0)>0?` <span class="cz-fee">+ ${money(Number(i.fee))} ${t('czrFeeLabel')}</span>`:''}${Array.isArray(i.options)&&i.options.length?` <small class="pay-art-tag">${i.options.map(x=>esc(x.valueLabel)).join(' · ')}</small>`:''}${i.engraving&&i.engraving.text?` <small class="pay-art-tag">${t('engLabel')}: ${esc(i.engraving.text)} (+${money(Number(i.engraving.fee||0))})</small>`:''}${i.artwork?` <a class="acct-art" href="${esc(i.artwork.preview||i.artwork.url)}" target="_blank" rel="noopener"><img src="${esc(i.artwork.preview||i.artwork.url)}" alt="">${t('czrBadge')}</a>`:''}</span><span>${money((i.unitPrice ?? i.price)*i.quantity)}</span></li>`).join('');
   const a=o.address||{};
   return `<details class="order-item"><summary><span class="oi-main"><strong>${esc(o.id)}</strong><small>${esc(dt)} · ${(o.items||[]).reduce((n,i)=>n+(i.quantity||1),0)} ${esc(t('articles'))}</small></span><span class="oi-side"><span class="order-status">${esc(statusLabel(o.status||''))}</span><strong>${money(o.total)}</strong></span></summary>
   <div class="oi-body">
@@ -497,8 +586,8 @@ function vipNotice(message){
 function openLightbox(list,start=0){let i=start||0,scale=1;const box=document.createElement('dialog');box.className='lightbox';box.innerHTML=`<button class="lb-close" aria-label="${t('close')}">×</button>${list.length>1?'<button class="lb-prev" aria-label="Previous">‹</button><button class="lb-next" aria-label="Next">›</button>':''}<figure class="lb-stage"><img alt=""></figure><p class="lb-count"></p>`;document.body.append(box);box.showModal();document.body.style.overflow='hidden';const img=box.querySelector('img'),count=box.querySelector('.lb-count'),stage=box.querySelector('.lb-stage');const paint=()=>{img.src=list[i];img.style.transform=`scale(${scale})`;count.textContent=list.length>1?`${i+1} / ${list.length}`:'';};const close=()=>{if(box.open)box.close();box.remove();document.body.style.overflow='';document.removeEventListener('keydown',key);};const go=d=>{i=(i+d+list.length)%list.length;scale=1;img.style.transformOrigin='center center';paint();};const key=e=>{if(e.key==='Escape')close();else if(e.key==='ArrowRight')go(1);else if(e.key==='ArrowLeft')go(-1);};box.querySelector('.lb-close').onclick=close;const prev=box.querySelector('.lb-prev'),next=box.querySelector('.lb-next');if(prev)prev.onclick=()=>go(-1);if(next)next.onclick=()=>go(1);stage.onclick=e=>{if(scale>1){scale=1;img.style.transformOrigin='center center';}else{const r=stage.getBoundingClientRect();img.style.transformOrigin=`${((e.clientX-r.left)/r.width)*100}% ${((e.clientY-r.top)/r.height)*100}%`;scale=2;}paint();};stage.onwheel=e=>{e.preventDefault();scale=Math.min(4,Math.max(1,scale+(e.deltaY<0?.3:-.3)));paint();};box.oncancel=e=>{e.preventDefault();close();};document.addEventListener('keydown',key);paint();}
 async function add(id){const p=store.products.find(p=>p.id===id);if(p.locked)return vipNotice();if((cart[id]||0)>=p.stock)return toast(t('limit'));if(art[id]&&!art[id].preview)await ensurePreview(p);cart[id]=(cart[id]||0)+1;persist();toast(t('added'));track('addcart',id);}
 let buyNow=null;
-function openCart(){const items=Object.entries(cart).map(([id,q])=>({p:store.products.find(p=>p.id===id),q})).filter(x=>x.p);const total=items.reduce((a,x)=>a+(x.p.price+lineFee(x.p))*x.q,0);show(`<h2>${t('bag')} <small>(${items.length})</small></h2>${items.length?`${items.map(({p,q})=>`<div class="cart-item">${p.image?`<img src="${esc(p.image)}" loading="lazy" decoding="async" alt="${esc(localized(p,'name'))}">`:`<span class="img-placeholder" aria-hidden="true">${esc((localized(p,'name')||'M').slice(0,1).toUpperCase())}</span>`}<div><h3>${esc(localized(p,'name'))}${artOf(p.id)?` <span class="cz-badge"><img src="${esc(artOf(p.id).preview||artOf(p.id).url)}" alt=""> ${t('czrBadge')}</span>`:''}</h3><p>${money(p.price)}${lineFee(p)?` <span class="cz-fee">+ ${money(lineFee(p))} ${t('czrFeeLabel')}</span>`:''}</p><div class="stepper"><button data-minus="${esc(p.id)}">−</button><span>${q}</span><button data-plus="${esc(p.id)}">＋</button><button data-remove="${esc(p.id)}">${t('remove')}</button></div></div></div>`).join('')}<div class="totals"><p>${t('subtotal')} <strong>${money(total)}</strong></p><p>${t('delivery')} <strong>${shipFor(total)?money(shipFor(total)):t('free')}</strong></p><p>${t('total')} <strong>${money(total+shipFor(total))}</strong></p></div><button class="button full" id="checkout">${t('checkout')} →</button>${items.some(x=>x.p.access==='vip')?`<p class="payment-review">${t('vipPayUsdt')}</p>`:''}<p class="muted">${t('notice')}</p>`:`<p class="empty">${t('bagEmpty')}</p>`}`);modal.querySelectorAll('[data-minus]').forEach(b=>b.onclick=()=>{if(--cart[b.dataset.minus]<=0)delete cart[b.dataset.minus];persist();openCart();});modal.querySelectorAll('[data-plus]').forEach(b=>b.onclick=()=>{add(b.dataset.plus);openCart();});modal.querySelectorAll('[data-remove]').forEach(b=>b.onclick=()=>{delete cart[b.dataset.remove];persist();openCart();});if($('#checkout'))$('#checkout').onclick=checkout;}
-function checkout(){const lines=(buyNow||Object.entries(cart).map(([id,quantity])=>({id,quantity}))).map(l=>art[l.id]?{...l,artwork:{url:art[l.id].url,x:art[l.id].x,y:art[l.id].y,size:art[l.id].size,...(art[l.id].preview?{preview:art[l.id].preview}:{})}}:l);const sum=lines.reduce((a,l)=>{const p=store.products.find(x=>x.id===l.id);return a+(p?(p.price+(art[l.id]?czFee():0))*l.quantity:0);},0);show(`<h2>${t('checkout')}</h2>${buyNow?`<div class="buy-now-line"><span>${esc(localized(store.products.find(p=>p.id===buyNow[0].id)||{},'name'))}</span><strong>${money(sum)}</strong></div>`:''}<p class="muted">${t('guestNote')}</p><form id="order-form">
+function openCart(){const items=Object.entries(cart).map(([id,q])=>({p:store.products.find(p=>p.id===id),q})).filter(x=>x.p);const total=items.reduce((a,x)=>a+(unitPrice(x.p,x.q)+lineFee(x.p))*x.q+engFeeOf(x.p,x.q),0);show(`<h2>${t('bag')} <small>(${items.length})</small></h2>${items.length?`${items.map(({p,q})=>`<div class="cart-item">${p.image?`<img src="${esc(p.image)}" loading="lazy" decoding="async" alt="${esc(localized(p,'name'))}">`:`<span class="img-placeholder" aria-hidden="true">${esc((localized(p,'name')||'M').slice(0,1).toUpperCase())}</span>`}<div><h3>${esc(localized(p,'name'))}${artOf(p.id)?` <span class="cz-badge"><img src="${esc(artOf(p.id).preview||artOf(p.id).url)}" alt=""> ${t('czrBadge')}</span>`:''}</h3><p>${money(unitPrice(p,q))}${lineFee(p)?` <span class="cz-fee">+ ${money(lineFee(p))} ${t('czrFeeLabel')}</span>`:''}${engFeeOf(p,q)?` <span class="cz-fee">+ ${money(engFeeOf(p,q))} ${t('engLabel')}</span>`:''}</p>${pickedOptions(p).length?`<p class="cart-opts">${pickedOptions(p).map(o=>`${esc(o.valueLabel)}${Number(o.delta)>0?` +${money(Number(o.delta))}`:''}`).join(' · ')}</p>`:''}${engTextOf(p)?`<p class="cart-opts">${t('engLabel')}: “${esc(engTextOf(p))}”</p>`:''}<div class="stepper"><button data-minus="${esc(p.id)}">−</button><span>${q}</span><button data-plus="${esc(p.id)}">＋</button><button data-remove="${esc(p.id)}">${t('remove')}</button></div></div></div>`).join('')}<div class="totals"><p>${t('subtotal')} <strong>${money(total)}</strong></p><p>${t('delivery')} <strong>${shipFor(total)?money(shipFor(total)):t('free')}</strong></p><p>${t('total')} <strong>${money(total+shipFor(total))}</strong></p></div><button class="button full" id="checkout">${t('checkout')} →</button>${items.some(x=>x.p.access==='vip')?`<p class="payment-review">${t('vipPayUsdt')}</p>`:''}<p class="muted">${t('notice')}</p>`:`<p class="empty">${t('bagEmpty')}</p>`}`);modal.querySelectorAll('[data-minus]').forEach(b=>b.onclick=()=>{if(--cart[b.dataset.minus]<=0)delete cart[b.dataset.minus];persist();openCart();});modal.querySelectorAll('[data-plus]').forEach(b=>b.onclick=()=>{add(b.dataset.plus);openCart();});modal.querySelectorAll('[data-remove]').forEach(b=>b.onclick=()=>{delete cart[b.dataset.remove];persist();openCart();});if($('#checkout'))$('#checkout').onclick=checkout;}
+function checkout(){const lines=(buyNow||Object.entries(cart).map(([id,quantity])=>({id,quantity}))).map(l=>{const p=store.products.find(x=>x.id===l.id);const extra={};if(art[l.id])extra.artwork={url:art[l.id].url,x:art[l.id].x,y:art[l.id].y,size:art[l.id].size,...(art[l.id].preview?{preview:art[l.id].preview}:{})};if(p&&pickedOptions(p).length)extra.options=pickedOptions(p).map(o=>({key:o.key,value:o.value}));const et=p?engTextOf(p):'';if(et)extra.engraving={text:et};return {...l,...extra};});const sum=lines.reduce((a,l)=>{const p=store.products.find(x=>x.id===l.id);if(!p)return a;return a+unitPrice(p,l.quantity)*l.quantity+(art[l.id]?czFee()*l.quantity:0)+engFeeOf(p,l.quantity);},0);show(`<h2>${t('checkout')}</h2>${buyNow?`<div class="buy-now-line"><span>${esc(localized(store.products.find(p=>p.id===buyNow[0].id)||{},'name'))}</span><strong>${money(sum)}</strong></div>`:''}<p class="muted">${t('guestNote')}</p><form id="order-form">
 <label>${t('recipient')}<input name="name" required maxlength="200" autocomplete="name"></label>
 <label>${t('email')}<input name="email" type="email" required maxlength="200" autocomplete="email"></label>
 <label>${t('phone')}<input name="phone" type="tel" required maxlength="40" autocomplete="tel"></label>
@@ -509,7 +598,7 @@ function checkout(){const lines=(buyNow||Object.entries(cart).map(([id,quantity]
 <label>${t('address2')}<input name="address2" maxlength="200" autocomplete="address-line2"></label>
 <label>${t('postal')}<input name="postalCode" required maxlength="20" autocomplete="postal-code"><small class="field-hint" id="postal-hint"></small></label>
 ${(()=>{const vipInCart=lines.some(l=>{const p=store.products.find(x=>x.id===l.id);return p&&(p.access==='vip'||p.effectiveAccess==='vip');});const isVip=!!(store.viewer&&store.viewer.level==='vip');const usdt=isVip||vipInCart;const readyMap=store.payments||{};const ready=usdt?readyMap.usdt:readyMap.paypal;return `<div class="pay-method"><h4>${t('paymentMethod')}</h4><div class="pm-card${ready?'':' pm-off'}"><span class="pm-name">${usdt?'USDT · '+String(readyMap.usdtNetwork||'').toUpperCase():'PayPal'}</span><span class="pm-desc">${usdt?t('usdtDesc'):t('paypalDesc')}</span>${ready?'':`<span class="pm-bad">${t('payClosed')}</span>`}</div><p class="pm-note">${usdt?t('vipPayUsdt'):t('memberPayPaypal')}</p></div>`;})()}
-${(()=>{const ship=shipFor(sum);return `<div class="checkout-summary"><div class="cs-row"><span>${t('subtotal')}</span><span>${money(sum - lines.reduce((a,l)=>{const p=store.products.find(x=>x.id===l.id);return a+(p&&art[l.id]?czFee()*l.quantity:0);},0))}</span></div>${lines.some(l=>art[l.id])?`<div class="cs-row"><span>${t('czrFeeLabel')}</span><span>${money(lines.reduce((a,l)=>{const p=store.products.find(x=>x.id===l.id);return a+(p&&art[l.id]?czFee()*l.quantity:0);},0))}</span></div>`:''}<div class="cs-row"><span>${t('delivery')}</span><span>${ship?money(ship):t('free')}</span></div><div class="cs-row cs-total"><span>${t('total')}</span><span>${money(sum+ship)}</span></div><p class="cs-note">${t('shipNote')}</p></div>`;})()}<label class="order-note">${t('orderNote')}<textarea name="note" rows="3" maxlength="500" placeholder="${t('orderNoteHint')}"></textarea></label><button class="button full">${t('submit')}</button><p class="form-error" role="alert"></p></form>`);const countrySel=$('#country-select'),slot=$('#state-slot'),hint=$('#postal-hint');
+${(()=>{const ship=shipFor(sum);const artTotal=lines.reduce((a,l)=>a+(art[l.id]?czFee()*l.quantity:0),0);const engTotal=lines.reduce((a,l)=>{const p=store.products.find(x=>x.id===l.id);return a+(p?engFeeOf(p,l.quantity):0);},0);return `<div class="checkout-summary"><div class="cs-row"><span>${t('subtotal')}</span><span>${money(sum-artTotal-engTotal)}</span></div>${artTotal?`<div class="cs-row"><span>${t('czrFeeLabel')}</span><span>${money(artTotal)}</span></div>`:''}${engTotal?`<div class="cs-row"><span>${t('engLabel')}</span><span>${money(engTotal)}</span></div>`:''}<div class="cs-row"><span>${t('delivery')}</span><span>${ship?money(ship):t('free')}</span></div><div class="cs-row cs-total"><span>${t('total')}</span><span>${money(sum+ship)}</span></div><p class="cs-note">${t('shipNote')}</p></div>`;})()}<label class="order-note">${t('orderNote')}<textarea name="note" rows="3" maxlength="500" placeholder="${t('orderNoteHint')}"></textarea></label><button class="button full">${t('submit')}</button><p class="form-error" role="alert"></p></form>`);const countrySel=$('#country-select'),slot=$('#state-slot'),hint=$('#postal-hint');
  const sync=()=>{const c=(store.countries||[]).find(x=>x.code===countrySel.value)||{};
   slot.innerHTML=c.states?`<select name="state" required autocomplete="address-level1">${c.states.map(st=>`<option value="${esc(st.code)}">${esc(st.name)}</option>`).join('')}</select>`:`<input name="state" maxlength="60" autocomplete="address-level1" placeholder="${t('stateOptional')}">`;
   hint.textContent=c.pattern?`${t('postalFormat')}: ${c.code}`:'';
