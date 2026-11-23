@@ -431,7 +431,7 @@ body.has-cookie{padding-bottom:92px}
 
 .stage.armed{touch-action:none;cursor:grab}
 .stage.armed.dragging{cursor:grabbing}
-.stage.armed::after{content:'⇕ 拖动 · 双指缩放 · 圆点调大小';position:absolute;left:8px;bottom:8px;padding:4px 8px;border-radius:999px;background:rgba(0,0,0,.6);color:#fff;font-size:10px;letter-spacing:.04em;pointer-events:none}
+.stage.armed::after{content:attr(data-hint);position:absolute;left:8px;bottom:8px;padding:4px 8px;border-radius:999px;background:rgba(0,0,0,.6);color:#fff;font-size:10px;letter-spacing:.04em;pointer-events:none}
 .stage.armed.dragging::after{opacity:.35}
 .order-note{display:grid;gap:6px;margin:14px 0 0;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
 .order-note textarea{font:inherit;font-size:14px;letter-spacing:0;text-transform:none;color:var(--ink);padding:10px 12px;border:1px solid var(--line);border-radius:8px;resize:vertical;min-height:76px}
