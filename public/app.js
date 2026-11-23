@@ -5,9 +5,9 @@ const linkText={en:{linkTitle:'Already ordered as a guest?',linkHelp:'Enter the 
 for(const l of ['en','de','es'])Object.assign(dictionaries[l],linkText[l]);
 for(const l of ['en','de','es']){Object.assign(dictionaries[l],paymentText[l]);dictionaries[l].notice=paymentText[l].payNotice;dictionaries[l].submit={en:'Create order & choose payment',de:'Bestellen und Zahlungsart wählen',es:'Crear pedido y elegir pago'}[l];}
 const cfgText={
- en:{quoteBtn:'Request a quotation',quoteTitle:'Request a quotation',quoteQty:'Quantity',quoteSend:'Send request',quoteThank:'Request received',quoteRef:'Reference',estimate:'Estimated total',quoteNotOrder:'This is a quotation request — nothing is charged and no stock is reserved.',quoteHint:'Dial colour, engraving text, delivery deadline…',engLabel:'Engraving',cfgMethod:'Finish',czrEdit:'Resize & position',czrDone:'Done, show mock-up',czrConfirmed:'Mock-up generated — we produce exactly this',cfgRequired:'Required',cfgCode:'Configuration code',cfgCopy:'Copy',cfgInclude:'incl. options'},
- de:{quoteBtn:'Angebot anfragen',quoteTitle:'Angebot anfragen',quoteQty:'Menge',quoteSend:'Anfrage senden',quoteThank:'Anfrage erhalten',quoteRef:'Referenz',estimate:'Geschätzter Betrag',quoteNotOrder:'Dies ist eine Angebotsanfrage — keine Zahlung, keine Reservierung.',quoteHint:'Zifferblattfarbe, Gravurtext, Liefertermin…',engLabel:'Gravur',cfgMethod:'Ausführung',czrEdit:'Größe & Position',czrDone:'Fertig, Vorschau',czrConfirmed:'Montage erzeugt — genau so wird produziert',cfgRequired:'Pflicht',cfgCode:'Konfigurationscode',cfgCopy:'Kopieren',cfgInclude:'inkl. Optionen'},
- es:{quoteBtn:'Solicitar presupuesto',quoteTitle:'Solicitar presupuesto',quoteQty:'Cantidad',quoteSend:'Enviar solicitud',quoteThank:'Solicitud recibida',quoteRef:'Referencia',estimate:'Total estimado',quoteNotOrder:'Es una solicitud de presupuesto: no se cobra ni se reserva stock.',quoteHint:'Color de esfera, texto grabado, plazo de entrega…',engLabel:'Grabado',cfgMethod:'Acabado',czrEdit:'Tamaño y posición',czrDone:'Listo, ver montaje',czrConfirmed:'Montaje generado — así se fabrica',cfgRequired:'Obligatorio',cfgCode:'Código de configuración',cfgCopy:'Copiar',cfgInclude:'incl. opciones'}
+ en:{quoteBtn:'Request a quotation',quoteTitle:'Request a quotation',quoteQty:'Quantity',quoteSend:'Send request',quoteThank:'Request received',quoteRef:'Reference',estimate:'Estimated total',quoteNotOrder:'This is a quotation request — nothing is charged and no stock is reserved.',quoteHint:'Dial colour, engraving text, delivery deadline…',engLabel:'Engraving',cfgMethod:'Finish',czrEdit:'Resize & position',czrDone:'Done, show mock-up',czrDoneShort:'Done ✓',czrConfirmed:'Mock-up generated — we produce exactly this',cfgRequired:'Required',cfgCode:'Configuration code',cfgCopy:'Copy',cfgInclude:'incl. options'},
+ de:{quoteBtn:'Angebot anfragen',quoteTitle:'Angebot anfragen',quoteQty:'Menge',quoteSend:'Anfrage senden',quoteThank:'Anfrage erhalten',quoteRef:'Referenz',estimate:'Geschätzter Betrag',quoteNotOrder:'Dies ist eine Angebotsanfrage — keine Zahlung, keine Reservierung.',quoteHint:'Zifferblattfarbe, Gravurtext, Liefertermin…',engLabel:'Gravur',cfgMethod:'Ausführung',czrEdit:'Größe & Position',czrDone:'Fertig, Vorschau',czrDoneShort:'Fertig ✓',czrConfirmed:'Montage erzeugt — genau so wird produziert',cfgRequired:'Pflicht',cfgCode:'Konfigurationscode',cfgCopy:'Kopieren',cfgInclude:'inkl. Optionen'},
+ es:{quoteBtn:'Solicitar presupuesto',quoteTitle:'Solicitar presupuesto',quoteQty:'Cantidad',quoteSend:'Enviar solicitud',quoteThank:'Solicitud recibida',quoteRef:'Referencia',estimate:'Total estimado',quoteNotOrder:'Es una solicitud de presupuesto: no se cobra ni se reserva stock.',quoteHint:'Color de esfera, texto grabado, plazo de entrega…',engLabel:'Grabado',cfgMethod:'Acabado',czrEdit:'Tamaño y posición',czrDone:'Listo, ver montaje',czrDoneShort:'Listo ✓',czrConfirmed:'Montaje generado — así se fabrica',cfgRequired:'Obligatorio',cfgCode:'Código de configuración',cfgCopy:'Copiar',cfgInclude:'incl. opciones'}
 };
 for(const l of ['en','de','es'])Object.assign(dictionaries[l],cfgText[l]);
 const contactText={en:'Chat with us',de:'Kontakt aufnehmen',es:'Chatea con nosotros'};
@@ -277,8 +277,8 @@ function paintArt(p){
 function openArtEditor(p){
  const a=art[p.id];if(!a||!p.image)return;
  const dlg=document.createElement('dialog');dlg.className='art-editor';
- dlg.innerHTML=`<div class="ae-head"><div><p class="eyebrow">${t('czrTitle')}</p><p class="muted small">${t('czrDrag')}</p></div><button type="button" class="ae-close" aria-label="${t('close')}">×</button></div>
- <div class="ae-stage" id="ae-stage"><img class="ae-base" src="${esc(p.image)}" alt="${esc(localized(p,'name'))}"><div class="ae-box" id="ae-box"><img class="ae-art" id="ae-art" src="${esc(a.url)}" alt=""><span class="ae-h ae-nw" data-h="nw"></span><span class="ae-h ae-ne" data-h="ne"></span><span class="ae-h ae-sw" data-h="sw"></span><span class="ae-h ae-se" data-h="se"></span></div></div>
+ dlg.innerHTML=`<div class="ae-head"><div><p class="eyebrow">${t('czrTitle')}</p><p class="muted small">${t('czrDrag')}</p></div><div class="ae-headbtns"><button type="button" class="ae-topdone" id="ae-done-top">${t('czrDoneShort')}</button><button type="button" class="ae-close" aria-label="${t('close')}">×</button></div></div>
+ <div class="ae-body"><div class="ae-stage" id="ae-stage"><img class="ae-base" src="${esc(p.image)}" alt="${esc(localized(p,'name'))}"><div class="ae-box" id="ae-box"><img class="ae-art" id="ae-art" src="${esc(a.url)}" alt=""><span class="ae-h ae-nw" data-h="nw"></span><span class="ae-h ae-ne" data-h="ne"></span><span class="ae-h ae-sw" data-h="sw"></span><span class="ae-h ae-se" data-h="se"></span></div></div></div>
  <div class="ae-text" id="ae-text" hidden><input id="ae-text-in" maxlength="16" placeholder="输入品牌名 / 缩写（最多 16 字）"><select id="ae-font"><option value="Arial">Arial</option><option value="cursive">Script</option><option value="fantasy">Gothic</option></select><button type="button" class="ae-txt" id="ae-text-ok">生成图案</button></div>
  <div class="ae-tools"><button type="button" class="ae-round" data-az="-1" aria-label="−">−</button><button type="button" class="ae-round" data-az="1" aria-label="+">+</button><button type="button" class="ae-txt" data-afit>${t('czrFit')}</button><div class="ae-nudge">${[['-1,0','←'],['0,-1','↑'],['0,1','↓'],['1,0','→']].map(([v,l])=>`<button type="button" class="ae-round" data-nudge="${v}" aria-label="${l}">${l}</button>`).join('')}</div>
   <div class="ae-pos">${[['50','22','12'],['78','50','3'],['50','78','6'],['22','50','9'],['50','50','◎']].map(([x,y,l])=>`<button type="button" class="ae-round" data-pos="${x},${y}" aria-label="${l} 点钟">${l}</button>`).join('')}</div>
@@ -323,19 +323,19 @@ function openArtEditor(p){
  const close=()=>{document.body.style.overflow='';if(dlg.open)dlg.close();dlg.remove();};
  dlg.querySelector('.ae-close').onclick=close;
  dlg.addEventListener('cancel',close);
- dlg.querySelector('#ae-done').onclick=async()=>{
+ const finish=async()=>{
   persistArt();invalidateShot(p);close();paintArt(p);
   toast(t('czrWorking'));
   paintPrice(p);
   const url=await ensurePreview(p);
   if(url){showShot(url);toast(t('czrConfirmed'));}else toast(t('czrNoShot'));
  };
+ dlg.querySelector('#ae-done').onclick=finish;
+ dlg.querySelector('#ae-done-top').onclick=finish;
  apply();
- // 舞台固定 1:1 且给头部/工具栏留空间：横屏、矮屏也不会把 Done 挤出屏幕
- const fitStage=()=>{const hh=dlg.querySelector('.ae-head').offsetHeight,th=dlg.querySelector('.ae-tools').offsetHeight;const avail=Math.max(140,Math.min(window.innerHeight-hh-th-28,window.innerWidth-36));stage.style.width=avail+'px';stage.style.height=avail+'px';apply();};
- fitStage();
- window.addEventListener('resize',fitStage);
- dlg.addEventListener('close',()=>window.removeEventListener('resize',fitStage));
+ const relayout=()=>{apply();};
+ window.addEventListener('resize',relayout);
+ dlg.addEventListener('close',()=>window.removeEventListener('resize',relayout));
 }
 function wireCustomizer(p){
  const file=document.querySelector('#czr-file');if(!file)return;
