@@ -536,3 +536,15 @@ dialog.art-editor::backdrop{background:#000c;backdrop-filter:blur(6px)}
 .czr-print{margin:12px 0 0;padding:11px 13px;border:1px solid #c8503f;background:#2a1512;color:#ffd9d1;font-size:12px;line-height:1.55}
 .czr-print::before{content:''}
 .art-warn{position:absolute;transform-origin:center;pointer-events:none;background:repeating-linear-gradient(45deg,rgba(200,80,63,.55) 0 5px,rgba(200,80,63,0) 5px 11px);border:1px dashed rgba(200,80,63,.8);box-shadow:0 0 0 1px rgba(0,0,0,.25);mix-blend-mode:multiply}
+
+/* /custom 目录页：可定制项清单 + 数量 + 收尾 CTA */
+.cz-opts-wrap{margin:22px 0 18px;padding-top:18px;border-top:1px solid #ddd8cc}
+.cz-opts-title{margin:0 0 10px;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#7d8378}
+.cz-opts{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 24px}
+.cz-opts li{position:relative;padding-left:16px;font-size:14px;color:#2c2f2a}
+.cz-opts li::before{content:'';position:absolute;left:0;top:.62em;width:6px;height:6px;border:1px solid #a98253}
+.cz-h2-row{display:flex;align-items:baseline;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.cz-count{margin:0;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:#7d8378}
+.cz-cta{margin:28px 0 0;font-size:15px;color:#2c2f2a}
+.cz-cta a{color:inherit;border-bottom:1px solid #a98253;text-decoration:none}
+@media(max-width:700px){.cz-opts{grid-template-columns:1fr}}
