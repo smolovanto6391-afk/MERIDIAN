@@ -462,7 +462,7 @@ body.has-cookie{padding-bottom:92px}
 .cfg-engrave .check{margin:0;font-size:12px;flex-direction:row;align-items:center;gap:9px}
 .cfg-engrave .check small{color:var(--muted);font-size:11px;margin-left:auto}
 .eng-body{margin-top:10px}
-.eng-body input{width:100%;text-transform:uppercase;letter-spacing:2px}
+.eng-body input{width:100%;letter-spacing:1.5px}
 .eng-body small{display:block;margin-top:6px}
 .cfg-tier{font-size:11px;color:#6d7a66;background:#eef1e6;padding:8px 12px;margin:0 0 12px}
 .cfg-code{display:flex;align-items:center;gap:10px;font-size:10px;letter-spacing:1.2px;text-transform:uppercase;color:#8a8f84;flex-wrap:wrap}

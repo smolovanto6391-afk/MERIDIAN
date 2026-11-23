@@ -1001,7 +1001,7 @@ const server=http.createServer(async(req,res)=>{
   const code=configCode(sel,{engraving:priced.engraveText,artwork:Boolean(artURL)});codes.push(code);
   return{id:p.id,name:p.name,price:p.price,quantity:i.quantity,fee:feeD,unitPrice:(priced.unitCents+priced.artworkCents)/100,
    ...(priced.optionCents?{optionFee:priced.optionCents/100}:{}),
-   ...(priced.tierOffPct?{tierOffPct:priced.tierOffPct,discount:((priced.baseCents+priced.optionCents-priced.unitCents)/100)*i.quantity}:{}),
+   ...(priced.tierOffPct?{tierOffPct:priced.tierOffPct,discount:Math.round((priced.baseCents+priced.optionCents-priced.unitCents)*i.quantity)/100}:{}),
    ...(sel.length?{options:sel.map(s=>({key:s.key,label:s.label,value:s.value,valueLabel:s.valueLabel,delta:s.delta,...(s.image?{image:s.image}:{})}))}:{}),
    ...(priced.engraveText?{engraving:{text:priced.engraveText,fee:priced.engraveFeeCents/100,perUnit:Boolean(p.engraving&&p.engraving.perUnit)}}:{}),
    config:code,
