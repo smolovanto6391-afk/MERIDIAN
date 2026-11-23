@@ -518,3 +518,11 @@ dialog.art-editor::backdrop{background:#000c;backdrop-filter:blur(6px)}
 .ae-done{margin-left:auto;padding:11px 22px;background:#e8d9a8;border:1px solid #e8d9a8;color:#241f12;font-size:11px;letter-spacing:1.4px;text-transform:uppercase;font-weight:600}
 .ae-done:hover{filter:brightness(1.06)}
 @media(max-width:700px){.ae-tools{gap:8px}.ae-done{margin-left:0;width:100%}.ae-nudge{margin-left:0}}
+
+/* 编辑态：文字 LOGO / 位置预设 */
+.ae-pos{display:flex;gap:6px;margin-left:6px}
+.ae-pos .ae-round{width:34px;height:34px;font-size:12px}
+.ae-text{display:flex;gap:8px;align-items:center;padding:0 22px 10px;flex-wrap:wrap}
+.ae-text[hidden]{display:none}
+.ae-text input{flex:1;min-width:180px;padding:10px 12px;border:1px solid #3c4540;background:#141817;color:#f2f1ec}
+.ae-text select{padding:10px;border:1px solid #3c4540;background:#141817;color:#f2f1ec}

@@ -65,10 +65,12 @@ export function orderEmail({ order, accessToken, brand = 'MERIDIAN', siteUrl = '
   const items = Array.isArray(details.items) ? details.items : [];
   const optLine = (i) => (Array.isArray(i.options) && i.options.length)
     ? `<br><span style="color:#868686;font-size:12px">${i.options.map((o) => `${esc(o.label)}: ${esc(o.valueLabel)}${Number(o.delta) > 0 ? ` (+${money(Number(o.delta))})` : ''}`).join(' · ')}</span>` : '';
+  const lmLine = (i) => (i.logoMethod && i.logoMethod.id)
+    ? `<br><span style="color:#868686;font-size:12px">Dial logo — ${esc(i.logoMethod.label)} (+${money(Number(i.logoMethod.fee || 0))} one-time)</span>` : '';
   const engLine = (i) => (i.engraving && i.engraving.text)
     ? `<br><span style="color:#868686;font-size:12px">Engraving “${esc(i.engraving.text)}” (+${money(Number(i.engraving.fee || 0))}${i.engraving.perUnit ? ' / unit' : ' one-time'})</span>` : '';
   const cfgLine = (i) => (i.config ? `<br><span style="color:#b0aca6;font-size:11px;letter-spacing:.08em">CFG ${esc(i.config)}</span>` : '');
-  const rows = items.map((i) => `<tr><td style="padding:10px 0;border-bottom:1px solid #eee">${esc(i.name)}<br><span style="color:#868686;font-size:12px">× ${i.quantity} · ${money(i.unitPrice ?? i.price)} each${Number(i.fee||0)>0?` <span style="color:#868686;font-size:12px">(+ ${money(Number(i.fee))} custom dial)</span>`:''}</span>${optLine(i)}${engLine(i)}${cfgLine(i)}${i.artwork?`<br><span style="color:#868686;font-size:12px">Custom dial ${i.artwork.preview?'customer-confirmed mock-up':'artwork'}: ${i.artwork.preview?`<br><img src="${esc(i.artwork.preview)}" alt="Custom dial mock-up" style="width:160px;border:1px solid #eee;border-radius:6px;margin-top:6px">`:''}<br><a href="${esc(i.artwork.preview||i.artwork.url)}">${esc(i.artwork.preview||i.artwork.url)}</a></span>`:''}</td><td align="right" style="padding:10px 0;border-bottom:1px solid #eee">${money((i.unitPrice ?? i.price) * i.quantity)}</td></tr>`).join('');
+  const rows = items.map((i) => `<tr><td style="padding:10px 0;border-bottom:1px solid #eee">${esc(i.name)}<br><span style="color:#868686;font-size:12px">× ${i.quantity} · ${money(i.unitPrice ?? i.price)} each${Number(i.fee||0)>0?` <span style="color:#868686;font-size:12px">(+ ${money(Number(i.fee))} custom dial)</span>`:''}</span>${optLine(i)}${lmLine(i)}${engLine(i)}${cfgLine(i)}${i.artwork?`<br><span style="color:#868686;font-size:12px">Custom dial ${i.artwork.preview?'customer-confirmed mock-up':'artwork'}: ${i.artwork.preview?`<br><img src="${esc(i.artwork.preview)}" alt="Custom dial mock-up" style="width:160px;border:1px solid #eee;border-radius:6px;margin-top:6px">`:''}<br><a href="${esc(i.artwork.preview||i.artwork.url)}">${esc(i.artwork.preview||i.artwork.url)}</a></span>`:''}</td><td align="right" style="padding:10px 0;border-bottom:1px solid #eee">${money((i.unitPrice ?? i.price) * i.quantity)}</td></tr>`).join('');
   const payUrl = siteUrl && accessToken ? `${siteUrl}/?order=${encodeURIComponent(order.id)}&token=${encodeURIComponent(accessToken)}` : '';
   const subject = `订单已收到 ${order.id} · ${brand}`;
   const html = `<!doctype html><html><body style="margin:0;background:#f6f5f3;font-family:Georgia,serif;color:#333">
@@ -96,6 +98,7 @@ ${details.note?`<div style="margin:0 0 18px;padding:12px 14px;background:#f7f5f0
     ...items.map((i) => [
       `${i.name} × ${i.quantity} — ${money((i.unitPrice ?? i.price) * i.quantity)}${i.artwork ? ` · artwork ${i.artwork.preview||i.artwork.url}` : ''}`,
       ...(Array.isArray(i.options) ? i.options.map((o) => `  ${o.label}: ${o.valueLabel}${Number(o.delta) > 0 ? ` (+${money(Number(o.delta))})` : ''}`) : []),
+      ...(i.logoMethod && i.logoMethod.id ? [`  Dial logo: ${i.logoMethod.label} (+${money(Number(i.logoMethod.fee || 0))} one-time)`] : []),
       ...(i.engraving && i.engraving.text ? [`  Engraving: "${i.engraving.text}" (+${money(Number(i.engraving.fee || 0))})`] : []),
       ...(i.config ? [`  CFG ${i.config}`] : []),
     ]).flat(),

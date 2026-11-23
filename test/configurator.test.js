@@ -158,4 +158,41 @@ test('configurator: options, tiers, engraving, config code and quotation', async
   assert.equal(list2[0].status, 'quoted');
   r = await fetch(base() + '/api/admin/quotes/' + encodeURIComponent(quote.id), { method: 'PUT', headers: { 'Content-Type': 'application/json', cookie }, body: JSON.stringify({ status: 'bogus' }) });
   assert.equal(r.status, 400);
+  // 6. 表盘 LOGO 工艺：一次性费用、配置码、非法工艺被拒绝
+  const LOGO = [
+    { id: 'laser', label: 'Laser engraving', labelZh: '激光刻字', fee: 5 },
+    { id: 'label', label: 'Metal label', labelZh: '金属标', fee: 75, hint: '含开模' },
+  ];
+  r = await putContent(p => (p.id === 'p1' ? { ...p, logoMethods: LOGO } : p));
+  assert.equal(r.status, 200, await r.text());
+  r = await fetch(base() + '/api/admin/publish', { method: 'POST', headers: { 'Content-Type': 'application/json', cookie }, body: '{}' });
+  assert.equal(r.status, 200);
+  r = await putContent(p => (p.id === 'p1' ? { ...p, logoMethods: [{ id: 'Bad Id', label: 'x', fee: 1 }] } : p));
+  assert.equal(r.status, 400, 'invalid logo method id rejected');
+  r = await putContent(p => (p.id === 'p1' ? { ...p, logoMethods: [{ id: 'ok', label: 'x', fee: 999 }] } : p));
+  assert.equal(r.status, 400, 'logo fee above cap rejected');
+  assert.equal((await (await fetch(base() + '/api/store')).json()).products.find(p => p.id === 'p1').logoMethods[0].labelZh, '激光刻字');
+
+  r = await post('/api/orders', {
+    name: 'Logo Buyer', email: 'logo@example.com', phone: '+1 617 555 0113',
+    address: '3 Logo Way', city: 'Boston', state: 'MA', postalCode: '02108', country: 'US',
+    items: [{ id: 'p1', quantity: 1, logoMethod: 'label' }],
+  });
+  const lo = await r.json();
+  assert.equal(lo.items[0].logoMethod.id, 'label');
+  assert.equal(lo.items[0].logoMethod.fee, 75);
+  assert.match(lo.items[0].config, /LABEL/);
+  assert.equal(lo.total, Number((189 + 75 + lo.shipping).toFixed(2)), 'logo tooling fee charged once');
+
+  r = await post('/api/orders', {
+    name: 'Logo Bad', email: 'logo2@example.com', phone: '+1 617 555 0114',
+    address: '4 Logo Way', city: 'Boston', state: 'MA', postalCode: '02108', country: 'US',
+    items: [{ id: 'p1', quantity: 1, logoMethod: 'nope' }],
+  });
+  assert.equal(r.status, 400, 'unknown logo method rejected');
+
+  r = await post('/api/quote', { productId: 'p1', email: 'q2@example.com', quantity: 10, logoMethod: 'laser' });
+  const q2 = await r.json();
+  assert.equal(r.status, 201, JSON.stringify(q2));
+  assert.equal(q2.estimate, Number((170.1 * 10 + 5).toFixed(2)), 'quotation: tier price + one-time logo fee');
 });

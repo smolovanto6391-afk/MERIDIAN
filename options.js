@@ -74,6 +74,37 @@ export function cleanEngraving(raw) {
   };
 }
 
+
+// 表盘 LOGO 工艺（刻字 / 金属标 / 丝印…），每种一个一次性费用
+export function cleanLogoMethods(raw) {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (const m of raw.slice(0, 4)) {
+    if (!m || typeof m !== 'object') continue;
+    const id = slug(m.id, 24);
+    if (!id || out.some((x) => x.id === id)) continue;
+    const item = {
+      id,
+      label: String(m.label || id).trim().slice(0, OPT_LIMITS.label) || id,
+      fee: Math.round(clampNum(m.fee, 0, 0, OPT_LIMITS.delta) * 100) / 100,
+    };
+    const labelZh = String(m.labelZh || '').trim().slice(0, OPT_LIMITS.label);
+    if (labelZh) item.labelZh = labelZh;
+    if (m.perColour === true) item.perColour = true;
+    if (String(m.hint || '').trim()) item.hint = String(m.hint).trim().slice(0, 80);
+    if (m.fee === undefined) item.fee = 0;
+    out.push(item);
+  }
+  return out;
+}
+
+// 文字 LOGO 允许的字体
+export const LOGO_FONTS = { arial: 'Arial', script: 'cursive', gothic: 'fantasy' };
+export function cleanLogoText(raw) {
+  const t = String(raw ?? '').replace(/[\u0000-\u001f\u007f<>]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 16);
+  return t;
+}
+
 export const tierFor = (tiers, quantity) => {
   let best = null;
   for (const t of Array.isArray(tiers) ? tiers : []) if (quantity >= t.qtyMin && (!best || t.qtyMin > best.qtyMin)) best = t;
@@ -109,7 +140,7 @@ export function resolveSelections(product, chosen) {
 }
 
 // 计价（分为单位，服务端权威）
-export function priceFor(product, { quantity, selections = [], artwork = null, engraving = null, customizerFee = 0 } = {}) {
+export function priceFor(product, { quantity, selections = [], artwork = null, engraving = null, customizerFee = 0, logoMethod = null } = {}) {
   const qty = Math.max(1, Math.round(Number(quantity) || 1));
   const baseCents = Math.round(Number(product.price || 0) * 100);
   const optionCents = selections.reduce((a, s) => a + Math.round(Number(s.delta || 0) * 100), 0);
@@ -120,7 +151,9 @@ export function priceFor(product, { quantity, selections = [], artwork = null, e
   const cfg = product.engraving && product.engraving.enabled ? product.engraving : null;
   const text = cfg && engraving ? cleanEngraveText(engraving.text, cfg.maxChars) : '';
   const engFeeCents = text ? Math.round(Number(cfg.fee || 0) * 100) * (cfg.perUnit ? qty : 1) : 0;
-  const totalCents = (unitCents + artworkCents) * qty + engFeeCents;
+  const lm = logoMethod && product.logoMethods ? product.logoMethods.find((m) => m.id === logoMethod) : null;
+  const logoFeeCents = lm ? Math.round(Number(lm.fee || 0) * 100) : 0;
+  const totalCents = (unitCents + artworkCents) * qty + engFeeCents + logoFeeCents;
   return {
     qty,
     baseCents,
@@ -130,6 +163,8 @@ export function priceFor(product, { quantity, selections = [], artwork = null, e
     tierOffPct: tier ? tier.offPct : 0,
     engraveText: text,
     engraveFeeCents: engFeeCents,
+    logoFeeCents,
+    logoMethod: lm ? { id: lm.id, label: lm.labelZh || lm.label, fee: logoFeeCents / 100 } : null,
     totalCents,
     itemsCents: totalCents, // 运费按商品合计计算
   };
@@ -144,8 +179,9 @@ export function engravingFor(product, raw) {
 }
 
 // 可复制的配置编码，例如 BLUE/STEEL/LEATHER/ENG/ART
-export function configCode(selections, { engraving = '', artwork = false } = {}) {
+export function configCode(selections, { engraving = '', artwork = false, logoMethod = '' } = {}) {
   const parts = (selections || []).map((s) => String(s.value || '').toUpperCase()).filter(Boolean);
+  if (logoMethod) parts.push(String(logoMethod).toUpperCase());
   if (engraving) parts.push('ENG');
   if (artwork) parts.push('ART');
   return parts.join('/') || 'STD';

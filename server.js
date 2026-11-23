@@ -3,7 +3,7 @@ import http from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
 import { randomBytes, timingSafeEqual, scryptSync, createHash, createCipheriv, createDecipheriv } from 'node:crypto';
 import { createMailer, orderEmail, quoteEmail } from './mailer.js';
-import { cleanOptions, cleanTiers, cleanEngraving, cleanEngraveText, resolveSelections, engravingFor, priceFor, configCode, imagePathOK, OPT_LIMITS } from './options.js';
+import { cleanOptions, cleanTiers, cleanEngraving, cleanEngraveText, cleanLogoMethods, cleanLogoText, resolveSelections, engravingFor, priceFor, configCode, imagePathOK, OPT_LIMITS } from './options.js';
 import { mkdirSync, readFileSync, writeFileSync, statSync } from 'node:fs';
 import { resolve, extname, join } from 'node:path';
 import { brotliCompressSync, gzipSync, constants as zconstants } from 'node:zlib';
@@ -265,7 +265,7 @@ const content=(field)=>{
  if(!Array.isArray(c.pages))c.pages=seed.pages;
  if(!Array.isArray(c.categories))c.categories=seed.categories;
  c.customizerFee=Number.isFinite(Number(raw.customizerFee))?Math.min(500,Math.max(0,Number(raw.customizerFee))):25;
-c.products=(Array.isArray(c.products)?c.products:[]).map(p=>({...p,badge:typeof p.badge==='string'?p.badge:'',specs:p.specs&&typeof p.specs==='object'&&!Array.isArray(p.specs)?p.specs:{},images:Array.isArray(p.images)&&p.images.length?p.images:(p.image?[p.image]:[]),description:typeof p.description==='string'?p.description:'',active:p.active!==false,customizer:cleanCustomizer(p.customizer),options:cleanOptions(p.options),tiers:cleanTiers(p.tiers),engraving:cleanEngraving(p.engraving)}));
+c.products=(Array.isArray(c.products)?c.products:[]).map(p=>({...p,badge:typeof p.badge==='string'?p.badge:'',specs:p.specs&&typeof p.specs==='object'&&!Array.isArray(p.specs)?p.specs:{},images:Array.isArray(p.images)&&p.images.length?p.images:(p.image?[p.image]:[]),description:typeof p.description==='string'?p.description:'',active:p.active!==false,customizer:cleanCustomizer(p.customizer),options:cleanOptions(p.options),tiers:cleanTiers(p.tiers),engraving:cleanEngraving(p.engraving),logoMethods:cleanLogoMethods(p.logoMethods)}));
  c.whatsapp={...whatsappDefaults,...raw.whatsapp,messages:{...whatsappDefaults.messages,...raw.whatsapp?.messages}};
  contentCache.set(field,{rev:contentRev,value:c});
  return structuredClone(c);
@@ -425,6 +425,17 @@ function validate(c){
    const fee=Number(e.fee||0);if(!Number.isFinite(fee)||fee<0||fee>OPT_LIMITS.engFee)throw Error('刻字费用需在 0–'+OPT_LIMITS.engFee+' 之间');
    const mc=Number(e.maxChars||10);if(!Number.isInteger(mc)||mc<1||mc>OPT_LIMITS.engChars)throw Error('刻字字数上限需在 1–'+OPT_LIMITS.engChars+' 之间');
    if(e.perUnit!==undefined&&typeof e.perUnit!=='boolean')throw Error('刻字计费方式格式错误');
+  }
+  if(p.logoMethods!==undefined){
+   if(!Array.isArray(p.logoMethods)||p.logoMethods.length>4)throw Error('LOGO 工艺最多 4 种');
+   const ids=new Set();
+   for(const m of p.logoMethods){
+    if(!m||typeof m.id!=='string'||!/^[a-z0-9_-]{1,24}$/.test(m.id)||ids.has(m.id))throw Error('LOGO 工艺标识不合法或重复');
+    ids.add(m.id);
+    if(typeof m.label!=='string'||!m.label.trim()||m.label.length>OPT_LIMITS.label)throw Error('LOGO 工艺名称不能为空，最多 '+OPT_LIMITS.label+' 字');
+    const fee=Number(m.fee||0);if(!Number.isFinite(fee)||fee<0||fee>OPT_LIMITS.delta)throw Error('LOGO 工艺费用需在 0–'+OPT_LIMITS.delta+' 之间');
+    if(m.perColour!==undefined&&typeof m.perColour!=='boolean')throw Error('LOGO 工艺计费方式格式错误');
+   }
   }
  }
  return c;
@@ -951,8 +962,10 @@ const server=http.createServer(async(req,res)=>{
    if(!Number.isInteger(qty)||qty<1||qty>100000)throw Error('询价数量需为 1–100000 的整数');
    const sel=resolveSelections(p,b.options);
    const eng=engravingFor(p,b.engraving);
-   const priced=priceFor(p,{quantity:qty,selections:sel,engraving:eng,customizerFee:0});
-   const details={productId:p.id,productName:p.name,email:String(b.email).trim().slice(0,200),name:String(b.name||'').slice(0,120),phone:String(b.phone||'').slice(0,60),company:String(b.company||'').slice(0,120),country:String(b.country||'').slice(0,60),quantity:qty,options:sel,engraving:eng||null,note:String(b.note||'').slice(0,1000),currency:'USD',unitEstimate:priced.unitCents/100,estimate:Number(((priced.unitCents*qty+priced.engraveFeeCents)/100).toFixed(2)),config:configCode(sel,{engraving:eng?eng.text:'',artwork:false}),source:String(sourceOf(req)).slice(0,40)};
+   const lmID=Array.isArray(p.logoMethods)&&p.logoMethods.length?String(b.logoMethod||'').trim():'';
+   if(lmID&&!p.logoMethods.some(x=>x.id===lmID))throw Error('请选择有效的 LOGO 工艺');
+   const priced=priceFor(p,{quantity:qty,selections:sel,engraving:eng,customizerFee:0,logoMethod:lmID||null});
+   const details={productId:p.id,productName:p.name,email:String(b.email).trim().slice(0,200),name:String(b.name||'').slice(0,120),phone:String(b.phone||'').slice(0,60),company:String(b.company||'').slice(0,120),country:String(b.country||'').slice(0,60),quantity:qty,options:sel,engraving:eng||null,logoMethod:priced.logoMethod||null,note:String(b.note||'').slice(0,1000),currency:'USD',unitEstimate:priced.unitCents/100,estimate:Number(((priced.unitCents*qty+priced.engraveFeeCents+priced.logoFeeCents)/100).toFixed(2)),config:configCode(sel,{engraving:eng?eng.text:'',artwork:false,logoMethod:lmID||''}),source:String(sourceOf(req)).slice(0,40)};
    const id='RFQ'+Date.now()+randomBytes(3).toString('hex');
    db.prepare('INSERT INTO quotes (id,created,details,status) VALUES (?,?,?,?)').run(id,new Date().toISOString(),JSON.stringify(details),'new');
    q.n++;quoteHits.set(ip,q);
@@ -994,16 +1007,19 @@ const server=http.createServer(async(req,res)=>{
   // 选项 / 刻字 全部按服务端配置校验并计价，客户端传来的加价一律忽略
   const sel=resolveSelections(p,i.options);
   const eng=engravingFor(p,i.engraving);
+  const lmID=Array.isArray(p.logoMethods)&&p.logoMethods.length?String(i.logoMethod||'').trim():'';
+  if(lmID&&!p.logoMethods.some(x=>x.id===lmID))throw Error('请选择有效的 LOGO 工艺');
   const feeD=artURL?(Number(c.customizerFee)||0):0;
-  const priced=priceFor(p,{quantity:i.quantity,selections:sel,artwork:artURL||null,engraving:eng,customizerFee:feeD});
+  const priced=priceFor(p,{quantity:i.quantity,selections:sel,artwork:artURL||null,engraving:eng,customizerFee:feeD,logoMethod:lmID||null});
   total+=priced.totalCents;
   p.stock-=i.quantity;const d=draft.products.find(x=>x.id===p.id);if(d)d.stock=Math.max(0,d.stock-i.quantity);
-  const code=configCode(sel,{engraving:priced.engraveText,artwork:Boolean(artURL)});codes.push(code);
+  const code=configCode(sel,{engraving:priced.engraveText,artwork:Boolean(artURL),logoMethod:lmID||''});codes.push(code);
   return{id:p.id,name:p.name,price:p.price,quantity:i.quantity,fee:feeD,unitPrice:(priced.unitCents+priced.artworkCents)/100,
    ...(priced.optionCents?{optionFee:priced.optionCents/100}:{}),
    ...(priced.tierOffPct?{tierOffPct:priced.tierOffPct,discount:Math.round((priced.baseCents+priced.optionCents-priced.unitCents)*i.quantity)/100}:{}),
    ...(sel.length?{options:sel.map(s=>({key:s.key,label:s.label,value:s.value,valueLabel:s.valueLabel,delta:s.delta,...(s.image?{image:s.image}:{})}))}:{}),
    ...(priced.engraveText?{engraving:{text:priced.engraveText,fee:priced.engraveFeeCents/100,perUnit:Boolean(p.engraving&&p.engraving.perUnit)}}:{}),
+   ...(priced.logoMethod?{logoMethod:priced.logoMethod}:{}),
    config:code,
    image:(sel.find(s=>s.image)||{}).image||p.image||null,
    ...(artURL?{artwork:{url:artURL,x:clamp(art.x,50,0,100),y:clamp(art.y,50,0,100),size:clamp(art.size,34,5,120),rot:clamp(art.rot,0,-45,45),...(prevURL?{preview:prevURL,confirmedAt:new Date().toISOString()}:{})}}:{})};});
