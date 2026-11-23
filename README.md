@@ -354,3 +354,49 @@ Dockerfile / docker-compose.yml / .dockerignore
 - 金额不含目的地税费与关税，正式收款前需完善 VAT / 销售税与配送策略。
 - 尚未实现：优惠券、多币种结算、PayPal 退款 / 争议同步、自动查链上到账、邮件恢复订单链接、购物车跨会话持久化、邀请码注册。
 - 未配置支付时订单仍可创建，但前台不显示对应方式；`/healthz` 只代表进程存活，不代表支付就绪。
+
+---
+
+## 安全与部署要点（2026-11 加固）
+
+按顺序读完再上线，这几条都会改变线上行为。
+
+### 1. 只监听回环地址
+
+`shared/config.env` 里必须是 `HOST=127.0.0.1`。对外只暴露反向代理（Caddy/Nginx）的 80/443。
+把 3000 直接开到公网会绕过 TLS、HSTS 和下面的可信代理判定。
+
+### 2. 可信反向代理头
+
+程序默认在配置了 `PUBLIC_BASE_URL`（即部署在 HTTPS 反代后）时，用 `X-Real-IP` / `X-Forwarded-For`
+判定真实访客 IP，登录限流、图案上传限流、订单查询限流都按真实 IP 计。Caddy 需要：
+
+```
+reverse_proxy 127.0.0.1:3000 {
+    header_up X-Real-IP {remote_host}
+}
+```
+
+若前面没有可信代理，设 `TRUST_PROXY=false`，避免伪造头部绕过限流。
+
+### 3. 后台敏感配置加密
+
+`shared/config.env` 里的 `SETTINGS_KEY` 用于加密落库的 SMTP 密码与 PayPal Client Secret
+（AES-256-GCM，库里前缀 `enc:v1:`）。**这个 key 丢失后，已加密的凭证无法恢复，需要在后台重新填一次。**
+没有 `SETTINGS_KEY` 时保持明文存储（向后兼容），新部署建议一律配置。
+
+### 4. 订单归属：只认账号，不认邮箱
+
+历史实现按邮箱字符串匹配订单，任何人用别人的邮箱注册即可看到其订单。
+现在 `/api/account/orders` 与付款令牌只认 `customer_id`；游客订单用
+`POST /api/account/link-order {orderId}` 绑定，且必须同时满足「订单号存在」+「下单邮箱与账号邮箱一致」。
+绑定入口在前台 `/account` 页底部。
+
+### 5. 统计遵守「先同意后追踪」
+
+访客未点击 cookie 同意条之前不下发 `mid` cookie、也不记录 PV。前端同意后调用
+`POST /api/track {kind:"consent"}`，之后才开始记 PV / UV / 加购。
+
+### 6. 定期清理
+
+进程每小时清理 90 天前的事件、过期会员会话、失效的限流键；间隔可用 `PRUNE_INTERVAL_MS` 调整。

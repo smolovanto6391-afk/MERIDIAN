@@ -1,7 +1,7 @@
 import {defaults, digest, readiness, methods, validateConfig, createCheckout, capturePayPal, verifyPayPalWebhook, transactionHash} from './payments.js';
 import http from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
-import { randomBytes, timingSafeEqual, scryptSync, createHash } from 'node:crypto';
+import { randomBytes, timingSafeEqual, scryptSync, createHash, createCipheriv, createDecipheriv } from 'node:crypto';
 import { createMailer, orderEmail } from './mailer.js';
 import { mkdirSync, readFileSync, writeFileSync, statSync } from 'node:fs';
 import { resolve, extname, join } from 'node:path';
@@ -9,13 +9,32 @@ import { brotliCompressSync, gzipSync, constants as zconstants } from 'node:zlib
 import {COUNTRIES, byCode, postcodeValid, stateList} from './countries.js';
 import { fileURLToPath } from 'node:url';
 const dir = process.env.DATA_DIR || './data'; mkdirSync(dir,{recursive:true});
+// —— 敏感配置加密（SMTP 密码 / PayPal Secret）——
+// 配了 SETTINGS_KEY 就落库前加密（AES-256-GCM）；没配则保持明文（向后兼容）。
+const SETTINGS_KEY=String(process.env.SETTINGS_KEY||'');
+const settingsKey=SETTINGS_KEY?createHash('sha256').update(SETTINGS_KEY).digest():null;
+const seal=(v)=>{
+ if(typeof v!=='string'||!v||!settingsKey||v.startsWith('enc:v1:'))return v;
+ const iv=randomBytes(12),c=createCipheriv('aes-256-gcm',settingsKey,iv);
+ const body=Buffer.concat([c.update(v,'utf8'),c.final()]);
+ return 'enc:v1:'+Buffer.concat([iv,body,c.getAuthTag()]).toString('base64');
+};
+const open_=(v)=>{
+ if(typeof v!=='string'||!v.startsWith('enc:v1:'))return v;
+ if(!settingsKey){console.error('[config] SETTINGS_KEY 缺失，无法解密已加密的敏感配置');return '';}
+ try{
+  const raw=Buffer.from(v.slice(7),'base64');
+  const iv=raw.subarray(0,12),tag=raw.subarray(raw.length-16),body=raw.subarray(12,raw.length-16);
+  const d=createDecipheriv('aes-256-gcm',settingsKey,iv);d.setAuthTag(tag);
+  return Buffer.concat([d.update(body),d.final()]).toString('utf8');
+ }catch{console.error('[config] 敏感配置解密失败（SETTINGS_KEY 是否变更过？）');return '';}
+};
 const uploadDir = resolve(dir,'uploads');
 const artworkHits=new Map(); mkdirSync(uploadDir,{recursive:true});
 // 公网地址：只接受纯 HTTPS 源，用于 canonical / OG / sitemap
 const publicBase=(()=>{if(!process.env.PUBLIC_BASE_URL)return '';try{const u=new URL(process.env.PUBLIC_BASE_URL);return u.protocol==='https:'&&u.pathname==='/'?u.origin:''}catch{return ''}})();
 // 未支付订单保留时长（分钟），0 表示关闭自动释放库存
 const orderTTL=Math.max(0,Number(process.env.ORDER_TTL_MINUTES??30))*60000;
-const MAIL_FIELDS=['provider','apiKey','from','fromName','apiUrl','notifyEmail','whatsapp'];
 function mailSettings(){
  let saved={};
  try{const row=db.prepare('SELECT value FROM mail_config WHERE id=1').get();if(row)saved=JSON.parse(row.value)||{};}catch{}
@@ -33,16 +52,41 @@ function mailSettings(){
   smtpPort:pick('smtpPort','MAIL_SMTP_PORT','587'),
   smtpSecure:pick('smtpSecure','MAIL_SMTP_SECURE','false'),
   smtpUser:pick('smtpUser','MAIL_SMTP_USER',''),
-  smtpPass:pick('smtpPass','MAIL_SMTP_PASS',''),
+  smtpPass:open_(pick('smtpPass','MAIL_SMTP_PASS','')),
   source:Object.keys(saved).length?'db':((env.MAIL_API_KEY||env.MAIL_SMTP_HOST)?'env':'none')
  };
  return settings;
 }
 function mailEnv(settings){return {...process.env,MAIL_PROVIDER:settings.provider,MAIL_API_KEY:settings.apiKey,MAIL_FROM:settings.from,MAIL_FROM_NAME:settings.fromName,MAIL_API_URL:settings.apiUrl,ORDER_NOTIFY_EMAIL:settings.notifyEmail,WHATSAPP_NUMBER:settings.whatsapp,MAIL_SMTP_HOST:settings.smtpHost,MAIL_SMTP_PORT:settings.smtpPort,MAIL_SMTP_SECURE:settings.smtpSecure,MAIL_SMTP_USER:settings.smtpUser,MAIL_SMTP_PASS:settings.smtpPass};}
-function visitorId(req,res){
- const raw=String(req.headers.cookie||'');
- const m=raw.match(/(?:^|;\s*)mid=([a-f0-9]{16,64})/);
- if(m)return m[1];
+// —— 真实客户端 IP ——
+// 进程跑在 Caddy 之类的反向代理后面时，socket 地址永远是 127.0.0.1，
+// 直接用它做限流键会让全站共用一个桶（一个人就能锁死所有人）。
+// 有 PUBLIC_BASE_URL（=部署在 HTTPS 反代后）或显式 TRUST_PROXY=true 时才采信代理头。
+const trustProxy=process.env.TRUST_PROXY==='true'||(process.env.TRUST_PROXY!=='false'&&Boolean(process.env.PUBLIC_BASE_URL));
+function clientIP(req){
+ if(trustProxy){
+  const real=String(req.headers['x-real-ip']||'').split(',')[0].trim();
+  if(/^[0-9a-fA-F:.]{3,45}$/.test(real))return real;
+  const fwd=String(req.headers['x-forwarded-for']||'').split(',')[0].trim();
+  if(/^[0-9a-fA-F:.]{3,45}$/.test(fwd))return fwd;
+ }
+ return req.socket.remoteAddress||'x';
+}
+function midOf(req){
+ const m=String(req.headers.cookie||'').match(/(?:^|;\s*)mid=([a-f0-9]{16,64})/);
+ return m?m[1]:'';
+}
+const trackHits=new Map();
+function trackLimited(req,perMin=60){
+ const ip=clientIP(req),now=Date.now(),hits=(trackHits.get(ip)||[]).filter(t=>now-t<60000);
+ if(hits.length>=perMin)return true;
+ hits.push(now);trackHits.set(ip,hits);return false;
+}
+// 未同意前不写 cookie：只有显式 consent 才种 mid（GDPR 下先同意后追踪）
+function visitorId(req,res,setCookie=false){
+ const existing=midOf(req);
+ if(existing)return existing;
+ if(!setCookie)return '';
  const id=randomBytes(16).toString('hex');
  const cookie=`mid=${id}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax${process.env.COOKIE_SECURE==='true'?'; Secure':''}`;
  const prev=res.getHeader('Set-Cookie');
@@ -98,19 +142,27 @@ function setCustomerCookie(res,id){
  res.setHeader('Set-Cookie',`meridian_customer=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000${process.env.COOKIE_SECURE==='true'?'; Secure':''}`);
 }
 db.exec('PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS content (id INTEGER PRIMARY KEY, draft TEXT NOT NULL, published TEXT NOT NULL); CREATE TABLE IF NOT EXISTS orders (id TEXT PRIMARY KEY, created TEXT NOT NULL, details TEXT NOT NULL);');
+// 订单归属列：查单/我的订单必须在 SQL 里按列过滤，否则订单量一大 LIMIT 就会漏掉老订单
+for(const col of ['email','customer_id']){try{db.exec(`ALTER TABLE orders ADD COLUMN ${col} TEXT`);}catch{}}
+db.exec('CREATE INDEX IF NOT EXISTS orders_email ON orders(email); CREATE INDEX IF NOT EXISTS orders_customer ON orders(customer_id);');
+try{
+ const pending=db.prepare('SELECT id,details,email,customer_id FROM orders WHERE email IS NULL OR customer_id IS NULL').all();
+ const upd=db.prepare('UPDATE orders SET email=COALESCE(email,?),customer_id=COALESCE(customer_id,?) WHERE id=?');
+ for(const r of pending){let d={};try{d=JSON.parse(r.details)||{};}catch{}upd.run(String(d.email||'').toLowerCase(),d.customerId||null,r.id);}
+}catch{}
 db.exec("CREATE TABLE IF NOT EXISTS events (ts TEXT NOT NULL, day TEXT NOT NULL, hour INTEGER NOT NULL, kind TEXT NOT NULL, ref TEXT NOT NULL DEFAULT '', vid TEXT NOT NULL DEFAULT '', source TEXT NOT NULL DEFAULT ''); CREATE INDEX IF NOT EXISTS events_lookup ON events(day,kind);");
 db.exec('CREATE TABLE IF NOT EXISTS mail_config (id INTEGER PRIMARY KEY, value TEXT NOT NULL);');
 db.exec("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);");
 const getSetting=(k)=>{try{return db.prepare('SELECT value FROM settings WHERE key=?').get(k)?.value||'';}catch{return '';}};
 const setSetting=(k,v)=>{db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(k,v);};
 const adminPassOk=(pw)=>typeof pw==='string'&&pw.length>0&&timingSafeEqual(scryptSync(pw,salt,64),hash);
-const verifyPass=(pw,stored)=>{if(typeof pw!=='string'||!stored)return false;const [sd,hx]=stored.split(':');if(!sd||!hx)return false;try{return timingSafeEqual(scryptSync(pw,Buffer.from(sd,'hex'),64),Buffer.from(hx,'hex'));}catch{return false;}};
+const verifyPass=checkPass; // 与 checkPass 同一实现
 const adminPasswordOk=(pw)=>{const saved=getSetting('admin_password');return saved?verifyPass(pw,saved):adminPassOk(pw);};
 db.exec("CREATE TABLE IF NOT EXISTS payment_config (id INTEGER PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS payments (order_id TEXT PRIMARY KEY, details TEXT NOT NULL); CREATE TABLE IF NOT EXISTS payment_receipts (network TEXT NOT NULL, tx_hash TEXT NOT NULL, order_id TEXT NOT NULL, UNIQUE(network,tx_hash)); CREATE TABLE IF NOT EXISTS order_access (order_id TEXT PRIMARY KEY, token_hash TEXT NOT NULL);");
 if(!db.prepare('SELECT id FROM payment_config WHERE id=1').get())db.prepare('INSERT INTO payment_config VALUES (1,?)').run(JSON.stringify(defaults));
 const paymentConfig=()=>({...defaults,...JSON.parse(db.prepare('SELECT value FROM payment_config WHERE id=1').get().value)});
 const PAY_CRED_DEFAULTS={paypalClientId:'',paypalClientSecret:'',paypalWebhookId:''};
-const paymentConfigFull=()=>({...PAY_CRED_DEFAULTS,...paymentConfig()});
+const paymentConfigFull=()=>{const c={...PAY_CRED_DEFAULTS,...paymentConfig()};c.paypalClientSecret=open_(c.paypalClientSecret||'');return c;};
 const paymentEnv=()=>{const c=paymentConfigFull(),e={...process.env};
  if(c.paypalClientId)e.PAYPAL_CLIENT_ID=c.paypalClientId;
  if(c.paypalClientSecret)e.PAYPAL_CLIENT_SECRET=c.paypalClientSecret;
@@ -131,8 +183,9 @@ const cleanShipping=(raw)=>{
  const freeOver=Math.min(5000000,Math.max(0,Math.round(Number(c.freeOver)||0)));
  return {mode,percent:Math.round(percent*100)/100,flat,freeOver};
 };
-// 早期版本把运费按“分”写进订单，读取时会显示成 100 倍。这里做一次性修正。
+// 早期版本把运费按“分”写进订单，读取时会显示成 100 倍。这里做一次性修正（用 settings 标记，只跑一次）。
 try{
+ if(!getSetting('migr_ship_cents')){
  const rows=db.prepare('SELECT id,details FROM orders').all();
  const fix=db.prepare('UPDATE orders SET details=? WHERE id=?');
  for(const r of rows){
@@ -142,6 +195,8 @@ try{
    d.shipping=Math.round(ship)/100;
    fix.run(JSON.stringify(d),r.id);
   }
+ }
+ setSetting('migr_ship_cents','1');
  }
 }catch{}
 const shippingCents=(itemsCents,cfg)=>{
@@ -198,7 +253,10 @@ const salt=randomBytes(16), hash=scryptSync(password,salt,64), sessions=new Map(
 const ADMIN_TTL=Number(process.env.ADMIN_SESSION_HOURS||8)*3600000;
 const ADMIN_REMEMBER=Number(process.env.ADMIN_REMEMBER_DAYS||30)*86400000;
 const whatsappDefaults={enabled:false,phone:'',messages:{en:'Hi! I would like to know more about your watches.',de:'Hallo! Ich möchte mehr über Ihre Uhren erfahren.',es:'¡Hola! Me gustaría saber más sobre sus relojes.'}};
+let contentRev=0;const contentCache=new Map();
 const content=(field)=>{
+ const cached=contentCache.get(field);
+ if(cached&&cached.rev===contentRev)return structuredClone(cached.value);
  const raw=JSON.parse(db.prepare('SELECT draft,published FROM content WHERE id=1').get()[field]);
  const c={...seed,...raw};
  // 兼容旧库：缺政策页 / 分类 / 商品新字段时补默认值，否则保存会被校验拒绝、政策页 404
@@ -206,14 +264,15 @@ const content=(field)=>{
  if(!Array.isArray(c.categories))c.categories=seed.categories;
  c.products=(Array.isArray(c.products)?c.products:[]).map(p=>({...p,badge:typeof p.badge==='string'?p.badge:'',specs:p.specs&&typeof p.specs==='object'&&!Array.isArray(p.specs)?p.specs:{},images:Array.isArray(p.images)&&p.images.length?p.images:(p.image?[p.image]:[]),description:typeof p.description==='string'?p.description:'',active:p.active!==false,customizer:cleanCustomizer(p.customizer)}));
  c.whatsapp={...whatsappDefaults,...raw.whatsapp,messages:{...whatsappDefaults.messages,...raw.whatsapp?.messages}};
- return c;
+ contentCache.set(field,{rev:contentRev,value:c});
+ return structuredClone(c);
 };
 const cleanCustomizer=(v)=>{
  const o=(v&&typeof v==='object'&&!Array.isArray(v))?v:{};
  const num=(x,d,lo,hi)=>{const n=Number(x);return Number.isFinite(n)?Math.min(hi,Math.max(lo,n)):d;};
  return {enabled:o.enabled===true,x:num(o.x,50,0,100),y:num(o.y,50,0,100),size:num(o.size,34,5,120)};
 };
-const save=(field,value)=>db.prepare(`UPDATE content SET ${field}=? WHERE id=1`).run(JSON.stringify(value));
+const save=(field,value)=>{contentRev++;contentCache.delete('draft');contentCache.delete('published');return db.prepare(`UPDATE content SET ${field}=? WHERE id=1`).run(JSON.stringify(value));};
 // —— 未支付订单过期：释放库存，避免弃单长期占用 ——
 function releaseOrderStock(id,reason){
  const o=getOrder(id); if(o.details.stockReleased)return false;
@@ -312,6 +371,28 @@ function validate(c){
  return c;
 }
 const COMPRESSIBLE=/^(text\/|application\/(json|xml|javascript)|image\/svg)/i;
+// 静态资源：进程内缓存 + 预先压好，避免每个请求都同步读盘再现场 brotli
+const staticCache=new Map();
+function staticEntry(abs,type){
+ const st=statSync(abs);
+ const key=abs+'|'+st.size+'|'+Math.floor(st.mtimeMs);
+ const hit=staticCache.get(key);
+ if(hit)return hit;
+ const raw=readFileSync(abs);
+ const compressible=COMPRESSIBLE.test(type);
+ const entry={text:compressible?raw.toString('utf8'):'',raw,br:null,gzip:null};
+ if(compressible&&raw.length>=1024){
+  entry.br=brotliCompressSync(raw,{params:{[zconstants.BROTLI_PARAM_QUALITY]:5}});
+  entry.gzip=gzipSync(raw,{level:6});
+ }
+ if(staticCache.size>24)staticCache.clear();
+ staticCache.set(key,entry);
+ return entry;
+}
+const sendRaw=(res,status,type,buf,extra={})=>{
+ res.writeHead(status,{...res.getHeaders(),'Content-Type':type,'Content-Length':buf.length,...extra});
+ return res.end(buf);
+};
 const encodeBody=(req,res,body,type='')=>{
  const buf=Buffer.isBuffer(body)?body:Buffer.from(String(body),'utf8');
  res.setHeader('Vary','Accept-Encoding');
@@ -396,7 +477,7 @@ function renderIndex(url,req){
  const preloads=`<link rel="preload" as="image" href="${escHtml(hero)}" fetchpriority="high"><link rel="preload" as="font" type="font/woff2" href="/fonts/poppins-400.woff2" crossorigin>`;
  return withAssets(readFileSync(resolve('public','index.html'),'utf8').replace('</head>',preloads+seoHead(url,req)+extra+'</head>'));
 }
-const escHtml=(x)=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const escHtml=esc; // 与 esc 同一实现，避免两份转义逻辑走岔
 const policyList=()=>(content('published').pages||[]).filter(p=>p&&p.id);
 function policyExists(name){return policyList().some(p=>p.id===name);}
 const POLICY_UI={
@@ -444,7 +525,7 @@ const server=http.createServer(async(req,res)=>{
   if(url.pathname==='/healthz')return json(res,200,{ok:true,uptime:Math.round(process.uptime())});
   if(req.method!=='GET'&&req.method!=='HEAD'&&!originAllowed(req)) return json(res,403,{error:'不允许跨站请求'});
   if(url.pathname==='/api/login'&&req.method==='POST'){
-   const ip=req.socket.remoteAddress,now=Date.now(),a=attempts.get(ip)||{n:0,t:now};if(now-a.t>600000){a.n=0;a.t=now;} if(a.n>=10)return json(res,429,{error:'尝试次数过多，请十分钟后再试'});
+   const ip=clientIP(req),now=Date.now(),a=attempts.get(ip)||{n:0,t:now};if(now-a.t>600000){a.n=0;a.t=now;} if(a.n>=10)return json(res,429,{error:'尝试次数过多，请十分钟后再试'});
    const b=await body(req);if(!adminPasswordOk(b.password)){a.n++;attempts.set(ip,a);return json(res,401,{error:'密码不正确'});}
    attempts.delete(ip);for(const [k,v] of sessions)if(v<now)sessions.delete(k);
    const remember=b.remember===true,ttl=remember?ADMIN_REMEMBER:ADMIN_TTL;
@@ -469,7 +550,7 @@ const server=http.createServer(async(req,res)=>{
    const confirmation=url.pathname.match(/^\/api\/admin\/orders\/([^/]+)\/confirm-usdt$/);
    if(confirmation&&req.method==='POST')return await locked(confirmation[1],async()=>{const id=confirmation[1],p=getPayment(id),b=await body(req);if(!p||p.provider!=='usdt')throw Error('No USDT payment found');if(p.status==='paid')return json(res,200,{payment:paymentView(p)});if(b.verified!==true||p.status!=='awaiting_review'||transactionHash(b.transactionId)!==p.submittedHash)throw Error('Verify the submitted transaction before confirming');const used=db.prepare('SELECT order_id FROM payment_receipts WHERE network=? AND tx_hash=?').get(p.network,p.submittedHash);if(used)throw Error('This transaction has already been used for another order');db.exec('BEGIN');try{db.prepare('INSERT INTO payment_receipts VALUES (?,?,?)').run(p.network,p.submittedHash,id);p.status='paid';p.transactionId=p.submittedHash;p.paidAt=new Date().toISOString();p.confirmedBy='admin';putPayment(id,p);const o=getOrder(id);o.details.status='Paid';db.prepare('UPDATE orders SET details=? WHERE id=?').run(JSON.stringify(o.details),id);db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}return json(res,200,{payment:paymentView(p)});});
    if(url.pathname==='/api/admin/payments'&&req.method==='GET')return json(res,200,{config:paymentConfigPublic(),readiness:readiness(paymentConfigFull(),paymentEnv())});
-   if(url.pathname==='/api/admin/payments'&&req.method==='PUT'){const raw=await body(req);const config=validateConfig(raw);const prev=paymentConfigFull();config.paypalClientId=(typeof raw.paypalClientId==='string'?raw.paypalClientId:prev.paypalClientId||'').trim().slice(0,300);config.paypalWebhookId=(typeof raw.paypalWebhookId==='string'?raw.paypalWebhookId:prev.paypalWebhookId||'').trim().slice(0,300);const incomingSecret=typeof raw.paypalClientSecret==='string'?raw.paypalClientSecret.trim():'';config.paypalClientSecret=raw.clearPaypalSecret===true?'':(incomingSecret||prev.paypalClientSecret||'');db.prepare('UPDATE payment_config SET value=? WHERE id=1').run(JSON.stringify({...config,paypalClientSecret:config.paypalClientSecret}));return json(res,200,{config:paymentConfigPublic(),readiness:readiness(paymentConfigFull(),paymentEnv())});}
+   if(url.pathname==='/api/admin/payments'&&req.method==='PUT'){const raw=await body(req);const config=validateConfig(raw);const prev=paymentConfigFull();config.paypalClientId=(typeof raw.paypalClientId==='string'?raw.paypalClientId:prev.paypalClientId||'').trim().slice(0,300);config.paypalWebhookId=(typeof raw.paypalWebhookId==='string'?raw.paypalWebhookId:prev.paypalWebhookId||'').trim().slice(0,300);const incomingSecret=typeof raw.paypalClientSecret==='string'?raw.paypalClientSecret.trim():'';config.paypalClientSecret=raw.clearPaypalSecret===true?'':(incomingSecret||prev.paypalClientSecret||'');db.prepare('UPDATE payment_config SET value=? WHERE id=1').run(JSON.stringify({...config,paypalClientSecret:seal(config.paypalClientSecret)}));return json(res,200,{config:paymentConfigPublic(),readiness:readiness(paymentConfigFull(),paymentEnv())});}
    if(url.pathname==='/api/admin/content'&&req.method==='GET')return json(res,200,content('draft'));
    if(url.pathname==='/api/admin/content'&&req.method==='PUT'){save('draft',validate(await body(req)));return json(res,200,{ok:true});}
    if(url.pathname==='/api/admin/publish'&&req.method==='POST'){save('published',validate(content('draft')));return json(res,200,{ok:true});}
@@ -517,7 +598,7 @@ const server=http.createServer(async(req,res)=>{
     const q=String(url.searchParams.get('q')||'').trim().toLowerCase();
     const rows=db.prepare('SELECT id,email,name,level,created FROM customers ORDER BY created DESC LIMIT 500').all();
     const list=q?rows.filter(r=>r.email.includes(q)||String(r.name||'').toLowerCase().includes(q)):rows;
-    return json(res,200,list.map(r=>({...r,orders:db.prepare("SELECT COUNT(*) n FROM orders WHERE details LIKE ?").get('%'+r.id+'%').n})));
+    return json(res,200,list.map(r=>({...r,orders:db.prepare('SELECT COUNT(*) n FROM orders WHERE customer_id=? OR lower(email)=lower(?)').get(r.id,r.email).n})));
    }
    if(url.pathname.startsWith('/api/admin/customers/')&&req.method==='PUT'){
     const id=decodeURIComponent(url.pathname.split('/').pop());
@@ -595,7 +676,7 @@ const server=http.createServer(async(req,res)=>{
     const smtpSecure=(b.smtpSecure===undefined?(String(cur.smtpSecure)==='true'):Boolean(b.smtpSecure))?'true':'false';
     const smtpPassRaw=b.smtpPass===undefined?cur.smtpPass:String(b.smtpPass||'');
     const next={provider,apiKey:apiKeyRaw,from,fromName:String(b.fromName??cur.fromName??'MERIDIAN').trim()||'MERIDIAN',apiUrl,notifyEmail,whatsapp:String(b.whatsapp??cur.whatsapp??'').trim(),smtpHost,smtpPort,smtpSecure,smtpUser:String(b.smtpUser??cur.smtpUser??'').trim(),smtpPass:smtpPassRaw};
-    db.prepare('INSERT INTO mail_config (id,value) VALUES (1,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value').run(JSON.stringify(next));
+    db.prepare('INSERT INTO mail_config (id,value) VALUES (1,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value').run(JSON.stringify({...next,smtpPass:seal(next.smtpPass)}));
     return json(res,200,{ok:true,...mailView()});
    }
    if(url.pathname==='/api/admin/mail/test'&&req.method==='POST'){
@@ -635,7 +716,7 @@ const server=http.createServer(async(req,res)=>{
    }
   }
   if(url.pathname==='/api/artwork'&&req.method==='POST'){
-   const ip=req.socket.remoteAddress||'x';const now=Date.now();const hits=(artworkHits.get(ip)||[]).filter(t=>now-t<600000);if(hits.length>=20)return json(res,429,{error:'上传过于频繁，请稍后再试'});
+   const ip=clientIP(req);const now=Date.now();const hits=(artworkHits.get(ip)||[]).filter(t=>now-t<600000);if(hits.length>=20)return json(res,429,{error:'上传过于频繁，请稍后再试'});
    const b=await body(req,8e6);const data=typeof b.data==='string'?b.data:'';
    if(!data)throw Error('缺少图案文件');
    const buf=Buffer.from(data.replace(/^data:[^,]*,/,''),'base64');
@@ -651,7 +732,7 @@ const server=http.createServer(async(req,res)=>{
   if(url.pathname==='/api/payments/methods'&&req.method==='GET')return json(res,200,methods(paymentConfigFull(),paymentEnv()));
   if(url.pathname==='/api/payments/paypal/webhook'&&req.method==='POST'){
    const event=await body(req);await verifyPayPalWebhook(event,req.headers,paymentConfigFull(),paymentEnv());
-   if(event.event_type==='PAYMENT.CAPTURE.COMPLETED'){const providerId=event.resource?.supplementary_data?.related_ids?.order_id;const row=db.prepare("SELECT order_id FROM payments WHERE json_extract(details,'$.provider')='paypal' AND json_extract(details,'$.providerId')=?").get(providerId||'');if(row)await locked(row.order_id,async()=>{const p=getPayment(row.order_id);if(p.status!=='paid'){const transaction=await capturePayPal(p,row.order_id,process.env);if(transaction)markPaid(row.order_id,transaction);}});}
+   if(event.event_type==='PAYMENT.CAPTURE.COMPLETED'){const providerId=event.resource?.supplementary_data?.related_ids?.order_id;const row=db.prepare("SELECT order_id FROM payments WHERE json_extract(details,'$.provider')='paypal' AND json_extract(details,'$.providerId')=?").get(providerId||'');if(row)await locked(row.order_id,async()=>{const p=getPayment(row.order_id);if(p.status!=='paid'){const transaction=await capturePayPal(p,row.order_id,paymentEnv());if(transaction)markPaid(row.order_id,transaction);}});}
    return json(res,200,{ok:true});
   }
   const summaryRoute=url.pathname.match(/^\/api\/orders\/([^/]+)\/summary$/);
@@ -677,7 +758,7 @@ const server=http.createServer(async(req,res)=>{
     const existing=getPayment(id),o=getOrder(id);
     if(paymentRoute[2]==='transaction'){if(!existing||existing.provider!=='usdt')throw Error('No USDT payment found');if(existing.status==='paid')return json(res,200,{payment:paymentView(existing)});const b=await body(req);existing.submittedHash=transactionHash(b.transactionId);existing.status='awaiting_review';existing.submittedAt=new Date().toISOString();putPayment(id,existing);return json(res,200,{payment:paymentView(existing)});}
 
-    if(paymentRoute[2]==='capture'){if(!existing||existing.provider!=='paypal')throw Error('No PayPal checkout found');if(existing.status!=='paid'){const transaction=await capturePayPal(existing,id,process.env);if(transaction)markPaid(id,transaction);}return json(res,200,{payment:paymentView(getPayment(id))});}
+    if(paymentRoute[2]==='capture'){if(!existing||existing.provider!=='paypal')throw Error('No PayPal checkout found');if(existing.status!=='paid'){const transaction=await capturePayPal(existing,id,paymentEnv());if(transaction)markPaid(id,transaction);}return json(res,200,{payment:paymentView(getPayment(id))});}
     const b=await body(req);if(!['paypal','usdt'].includes(b.provider))throw Error('Unknown payment method');
     if(existing){if(existing.provider!==b.provider)throw Error('This order already has a payment method');return json(res,200,{payment:paymentView(existing)});}
     if(!methods(paymentConfigFull(),paymentEnv())[b.provider])throw Error('Payment method is not configured');
@@ -698,7 +779,7 @@ const server=http.createServer(async(req,res)=>{
    return json(res,201,{email,level:'normal',name});
   }
   if(url.pathname==='/api/auth/login'&&req.method==='POST'){
-   const ip='c:'+req.socket.remoteAddress,now=Date.now(),a=attempts.get(ip)||{n:0,t:now};
+   const ip='c:'+clientIP(req),now=Date.now(),a=attempts.get(ip)||{n:0,t:now};
    if(now-a.t>600000){a.n=0;a.t=now;}
    if(a.n>=10)return json(res,429,{error:'尝试次数过多，请十分钟后再试'});
    const b=await body(req),email=String(b.email||'').trim().toLowerCase();
@@ -720,9 +801,10 @@ const server=http.createServer(async(req,res)=>{
   }
   if(url.pathname==='/api/track'&&req.method==='POST'){
    const b=await body(req);
+   if(b.kind==='consent'||b.consent===true){visitorId(req,res,true);return json(res,204,{});}
    const kind=['product','category','addcart'].includes(b.kind)?b.kind:'';
-   if(!kind)return json(res,204,{});
-   const vid=visitorId(req,res);
+   const vid=midOf(req);
+   if(!kind||!vid||trackLimited(req))return json(res,204,{});
    trackEvent(kind,{ref:String(b.id||'').slice(0,64),vid,source:sourceOf(req)});
    return json(res,204,{});
   }
@@ -748,7 +830,7 @@ const server=http.createServer(async(req,res)=>{
    const row=db.prepare('SELECT details FROM orders WHERE id=?').get(id);
    if(!row)return json(res,404,{error:'订单不存在'});
    const d=JSON.parse(row.details)||{};
-   const own=(d.customerId&&d.customerId===v.id)||String(d.email||'').toLowerCase()===String(v.email||'').toLowerCase();
+   const own=Boolean(d.customerId&&d.customerId===v.id);
    if(!own)return json(res,403,{error:'无权访问该订单'});
    const token=randomBytes(24).toString('hex');
    db.prepare('INSERT INTO order_access VALUES (?,?) ON CONFLICT(order_id) DO UPDATE SET token_hash=excluded.token_hash').run(id,digest(token));
@@ -757,27 +839,42 @@ const server=http.createServer(async(req,res)=>{
   if(url.pathname==='/api/account/orders'&&req.method==='GET'){
    const v=customerFromReq(req);
    if(!v)return json(res,401,{error:'请先登录'});
-   const rows=db.prepare('SELECT id,created,details FROM orders ORDER BY created DESC LIMIT 500').all();
-   const mine=[];
-   for(const r of rows){
-    let d;try{d=JSON.parse(r.details)||{};}catch{continue;}
-    const sameId=d.customerId&&d.customerId===v.id;
-    const sameMail=String(d.email||'').toLowerCase()===String(v.email||'').toLowerCase();
-    if(!sameId&&!sameMail)continue;
-    mine.push({id:r.id,created:r.created,status:d.status,total:d.total,shipping:d.shipping,currency:'USD',items:(d.items||[]).map(i=>({name:i.name,quantity:i.quantity,price:i.price,image:i.image||null,...(i.artwork?{artwork:i.artwork}:{})})),paymentPolicy:d.paymentPolicy||'',tracking:d.tracking||null,address:{name:d.name||'',line1:d.address||'',line2:d.address2||'',city:d.city||'',state:d.state||'',postalCode:d.postalCode||'',countryName:d.countryName||d.country||''}});
-    if(mine.length>=30)break;
-   }
+   // 只按 customerId 归属。绝不按邮箱字符串匹配：否则用别人的邮箱注册就能看到别人的订单。
+   const rows=db.prepare('SELECT id,created,details FROM orders WHERE customer_id=? ORDER BY created DESC LIMIT 30').all(v.id);
+   const mine=rows.map(r=>{
+    let d;try{d=JSON.parse(r.details)||{};}catch{return null;}
+    return {id:r.id,created:r.created,status:d.status,total:d.total,shipping:d.shipping,currency:'USD',items:(d.items||[]).map(i=>({name:i.name,quantity:i.quantity,price:i.price,image:i.image||null,...(i.artwork?{artwork:i.artwork}:{})})),paymentPolicy:d.paymentPolicy||'',tracking:d.tracking||null,address:{name:d.name||'',line1:d.address||'',line2:d.address2||'',city:d.city||'',state:d.state||'',postalCode:d.postalCode||'',countryName:d.countryName||d.country||''}};
+   }).filter(Boolean);
    return json(res,200,{orders:mine});
+  }
+  // 绑定历史订单：必须同时知道「订单号」和「下单邮箱」，防止仅凭邮箱认领订单
+  if(url.pathname==='/api/account/link-order'&&req.method==='POST'){
+   const v=customerFromReq(req);
+   if(!v)return json(res,401,{error:'请先登录'});
+   const ip=clientIP(req),now=Date.now(),a=lookups.get(ip)||{n:0,t:now};
+   if(now-a.t>600000){a.n=0;a.t=now;}
+   if(a.n>=30)return json(res,429,{error:'操作过于频繁，请十分钟后再试'});
+   const b=await body(req);
+   const ref=String(b.orderId||'').trim();
+   if(!ref)return json(res,400,{error:'请输入订单号'});
+   const row=db.prepare('SELECT id,details,customer_id FROM orders WHERE id=? COLLATE NOCASE').get(ref);
+   if(!row)return json(res,404,{error:'没有找到这个订单，请核对订单号'});
+   let d={};try{d=JSON.parse(row.details)||{};}catch{}
+   if(String(d.email||'').toLowerCase()!==String(v.email||'').toLowerCase())return json(res,403,{error:'该订单的下单邮箱与当前账号不一致'});
+   if(row.customer_id&&row.customer_id!==v.id)return json(res,409,{error:'该订单已经绑定到其他账号'});
+   a.n++;lookups.set(ip,a);
+   d.customerId=v.id;
+   db.prepare('UPDATE orders SET details=?,customer_id=? WHERE id=?').run(JSON.stringify(d),v.id,row.id);
+   return json(res,200,{ok:true,id:row.id});
   }
   if(url.pathname==='/api/orders/lookup'&&req.method==='GET'){
    const email=String(url.searchParams.get('email')||'').trim().toLowerCase();
-   const ref=String(url.searchParams.get('id')||'').trim().toUpperCase();
+   const ref=String(url.searchParams.get('id')||'').trim();
    if(!email||!ref)return json(res,400,{error:'请输入下单邮箱和订单号'});
-   const ip=req.socket.remoteAddress,now=Date.now(),a=lookups.get(ip)||{n:0,t:now};if(now-a.t>600000){a.n=0;a.t=now;}if(a.n>=30)return json(res,429,{error:'查询次数过多，请十分钟后再试'});a.n++;lookups.set(ip,a);
-   const rows=db.prepare('SELECT id,created,details FROM orders ORDER BY created DESC LIMIT 500').all();
-   const hit=rows.find(r=>r.id.toUpperCase()===ref&&String((JSON.parse(r.details)||{}).email||'').toLowerCase()===email);
-   if(!hit)return json(res,404,{error:'没有找到匹配的订单，请核对邮箱和订单号'});
-   const d=JSON.parse(hit.details);
+   const ip=clientIP(req),now=Date.now(),a=lookups.get(ip)||{n:0,t:now};if(now-a.t>600000){a.n=0;a.t=now;}if(a.n>=30)return json(res,429,{error:'查询次数过多，请十分钟后再试'});a.n++;lookups.set(ip,a);
+   const hit=db.prepare('SELECT id,created,details FROM orders WHERE id=? COLLATE NOCASE').get(ref);
+   let d=null;try{d=hit?JSON.parse(hit.details)||{}:null;}catch{}
+   if(!hit||!d||String(d.email||'').toLowerCase()!==email)return json(res,404,{error:'没有找到匹配的订单，请核对邮箱和订单号'});
    return json(res,200,{id:hit.id,created:hit.created,status:d.status,total:d.total,shipping:d.shipping,currency:'USD',items:(d.items||[]).map(i=>({name:i.name,quantity:i.quantity,price:i.price,image:i.image||null,...(i.artwork?{artwork:i.artwork}:{})})),countryName:d.countryName||d.country,tracking:d.tracking||null});
   }
   if(url.pathname.startsWith('/api/products/')&&req.method==='GET'){
@@ -805,7 +902,7 @@ const server=http.createServer(async(req,res)=>{
   return{id:p.id,name:p.name,price:p.price,quantity:i.quantity,...(artURL?{artwork:{url:artURL,x:clamp(art.x,50,0,100),y:clamp(art.y,50,0,100),size:clamp(art.size,34,5,120),rot:clamp(art.rot,0,-45,45),...(prevURL?{preview:prevURL}:{})}}:{})};});
    const shipRule=cleanShipping(shippingConfig());const shipping=shippingCents(total,shipRule);const details={shippingRule:shipRule,...(customerFromReq(req)?{customerId:customerFromReq(req).id}:{}),paymentPolicy:PAYMENT_RULES_OFF?null:((hasVipItem||(viewer&&viewer.level==='vip'))?'usdt':'paypal'),country:String(b.country||'').toUpperCase().slice(0,100),countryName:(byCode(b.country)||{}).name||'',city:String(b.city||'').slice(0,80),state:String(b.state||'').slice(0,60),postalCode:String(b.postalCode||'').slice(0,40),address2:String(b.address2||'').slice(0,200),email:String(b.email||'').slice(0,200),currency:'USD',name:b.name.trim(),phone:b.phone.trim(),address:b.address.trim(),items,total:(total+shipping)/100,shipping:shipping/100,status:'Awaiting confirmation — unpaid'};const id='MY'+Date.now()+randomBytes(3).toString('hex');
    const accessToken=randomBytes(32).toString('hex');
-   db.exec('BEGIN');try{save('published',c);save('draft',draft);db.prepare('INSERT INTO orders VALUES (?,?,?)').run(id,new Date().toISOString(),JSON.stringify(details));db.prepare('INSERT INTO order_access VALUES (?,?)').run(id,digest(accessToken));db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}queueOrderMail({id,...details},accessToken);return json(res,201,{id,...details,accessToken});
+   db.exec('BEGIN');try{save('published',c);save('draft',draft);db.prepare('INSERT INTO orders (id,created,details,email,customer_id) VALUES (?,?,?,?,?)').run(id,new Date().toISOString(),JSON.stringify(details),String(details.email||'').toLowerCase(),details.customerId||null);db.prepare('INSERT INTO order_access VALUES (?,?)').run(id,digest(accessToken));db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}queueOrderMail({id,...details},accessToken);return json(res,201,{id,...details,accessToken});
   }
   if(url.pathname==='/api/version')return json(res,200,{build:SERVER_BUILD,assets:assetV()});
   if(url.pathname.startsWith('/api/'))return json(res,404,{error:'接口不存在'});
@@ -837,7 +934,7 @@ const server=http.createServer(async(req,res)=>{
   const file=url.pathname==='/admin'?'admin.html':(url.pathname==='/'||url.pathname==='/account'||url.pathname==='/pay'||url.pathname==='/custom')?'index.html':url.pathname.slice(1);
   if(!['index.html','admin.html','app.js','admin.js','style.css','fonts.css','theme-tandorio.css','assets/hero.svg','assets/classic.svg','assets/noir.svg','assets/strap.svg','assets/case.svg','assets/favicon.svg'].includes(file)){res.writeHead(404);return res.end('Not found');}
   if(file==='index.html'){
-   if(req.method==='GET'){try{const vid=visitorId(req,res);trackEvent('page',{vid,source:sourceOf(req)});}catch{}}
+   if(req.method==='GET'){const vid0=midOf(req);try{if(vid0&&!trackLimited(req,120))trackEvent('page',{vid:vid0,source:sourceOf(req)});}catch{}}
    res.setHeader('Cache-Control','no-cache');return send(req,res,200,'text/html; charset=utf-8',renderIndex(url,req));
   }
   const abs=resolve('public',file),st=statSync(abs);
@@ -848,8 +945,34 @@ const server=http.createServer(async(req,res)=>{
   if(!versioned&&req.headers['if-none-match']===etag){res.writeHead(304);return res.end();}
   const ext=extname(file);
   const type=({'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml','.woff2':'font/woff2','.json':'application/json; charset=utf-8'})[ext]||'application/octet-stream';
-  const payload=readFileSync(abs);
-  return send(req,res,200,type,file.endsWith('.html')?withAssets(payload.toString('utf8')):payload,{ETag:etag});
- }catch(e){json(res,400,{error:e.message||'请求失败'});}
+  const entry=staticEntry(abs,type);
+  if(file.endsWith('.html'))return send(req,res,200,type,withAssets(entry.text),{ETag:etag});
+  const accept=String(req.headers['accept-encoding']||'');
+  const enc=(/\bbr\b/.test(accept)&&entry.br)?{buf:entry.br,name:'br'}:(/\bgzip\b/.test(accept)&&entry.gzip)?{buf:entry.gzip,name:'gzip'}:null;
+  res.setHeader('Vary','Accept-Encoding');
+  if(enc)res.setHeader('Content-Encoding',enc.name);
+  return sendRaw(res,200,type,enc?enc.buf:entry.raw,{ETag:etag});
+ }catch(e){
+  const raw=String((e&&e.message)||'请求失败');
+  // 内部/基础设施错误：记日志、回 500、不把 SQL/网络栈信息透给浏览器
+  const internal=/SQLITE|EACCES|ENOSPC|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EHOSTUNREACH|Cannot read|is not a function|undefined is not|socket hang up|Invalid URL/i.test(raw);
+  if(internal)console.error('[request]',req.method,req.url,'->',raw,(e&&e.stack?String(e.stack).split('\n')[1]||'':''));
+  return json(res,internal?500:400,{error:internal?'服务器暂时无法处理这个请求，请稍后再试':raw.slice(0,300)});
+ }
 });
+// —— 定期清理：事件表、过期会话、限流表（长期运行不再无限增长）——
+const PRUNE_EVERY=Math.max(60000,Number(process.env.PRUNE_INTERVAL_MS||3600000));
+function pruneNow(){
+ try{
+  const cutoff=new Date(Date.now()-90*86400000).toISOString().slice(0,10);
+  db.prepare('DELETE FROM events WHERE day<?').run(cutoff);
+  db.prepare('DELETE FROM customer_sessions WHERE expires<?').run(Date.now());
+  const now=Date.now();
+  for(const [k,v] of sessions)if(!(v>now))sessions.delete(k);
+  for(const m of [attempts,lookups])for(const [k,v] of m)if(now-Number(v.t||0)>3600000)m.delete(k);
+  for(const [k,v] of trackHits)if(!v.some(t=>now-t<60000))trackHits.delete(k);
+  for(const [k,v] of artworkHits)if(!v.some(t=>now-t<600000))artworkHits.delete(k);
+ }catch(e){console.error('[sweep]',e.message);}
+}
+setInterval(pruneNow,PRUNE_EVERY).unref();
 server.listen(Number(process.env.PORT||3000),process.env.HOST||'0.0.0.0',()=>console.log('MERIDIAN 商城已启动，端口 '+(process.env.PORT||3000)));

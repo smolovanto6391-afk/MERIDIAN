@@ -103,6 +103,8 @@ test('/pay is a standalone page and the order summary reports shipping in dollar
  assert.equal(Math.round(fresh.details.shipping*100),Math.round(items*10/100),'shipping is stored in dollars, not cents');
  const reg=await json('/api/auth/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:'p@example.com',name:'P',password:'customerpass123'})});
  const customerCookie=reg.headers.get('set-cookie').split(';')[0];
+ const link=await json('/api/account/link-order',{method:'POST',headers:{'Content-Type':'application/json',Cookie:customerCookie},body:JSON.stringify({orderId})});
+ assert.equal(link.status,200,'游客订单需用订单号绑定到账号');
  const owner=await json('/api/account/orders/'+encodeURIComponent(orderId)+'/access',{method:'POST',headers:{Cookie:customerCookie}});
  const {accessToken}=await owner.json();
  const sum=await json('/api/orders/'+encodeURIComponent(orderId)+'/summary',{headers:{Authorization:'Bearer '+accessToken}});

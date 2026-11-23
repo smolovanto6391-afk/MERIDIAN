@@ -43,7 +43,7 @@ test('a registered customer gets an empty order list',async()=>{
 test('an order shows up in the account list with address and total',async()=>{
  const store=await (await fetch(S.base+'/api/store')).json();
  const pid=store.products[0].id;
- const mk=await fetch(S.base+'/api/orders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:'buyer@example.com',name:'Buyer',phone:'+16175550123',address:'1 Main St',city:'Boston',state:'MA',postalCode:'02108',country:'US',items:[{id:pid,quantity:2}]})});
+ const mk=await fetch(S.base+'/api/orders',{method:'POST',headers:{'Content-Type':'application/json',Cookie:customerCookie},body:JSON.stringify({email:'buyer@example.com',name:'Buyer',phone:'+16175550123',address:'1 Main St',city:'Boston',state:'MA',postalCode:'02108',country:'US',items:[{id:pid,quantity:2}]})});
  assert.equal(mk.status,201);
  const created=await mk.json();
  orderId=created.id;
@@ -84,4 +84,39 @@ test('the owner can re-open the payment step for an unpaid order',async()=>{
  assert.ok(accessToken&&accessToken.length>20);
  const state=await (await fetch(S.base+'/api/orders/'+encodeURIComponent(orderId)+'/payment',{headers:{Authorization:'Bearer '+accessToken}})).json();
  assert.equal(state.id,orderId);
+});
+
+test('only the order number plus matching email can claim a guest order',async()=>{
+ // 匿名下单（游客，没有 account）
+ const store=await (await fetch(S.base+'/api/store')).json();
+ const pid=store.products.find(p=>p.stock>0).id;
+ const mk=await fetch(S.base+'/api/orders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:'guest@example.com',name:'Guest',phone:'+1 202 555 0123',address:'9 Guest Rd',city:'Boston',state:'MA',postalCode:'02108',country:'US',items:[{id:pid,quantity:1}]})});
+ assert.equal(mk.status,201);
+ const guest=mk;
+ const guestId=(await guest.json()).id;
+
+ // 攻击者用同一个邮箱注册：看不到、也拿不到付款令牌
+ const reg=await fetch(S.base+'/api/auth/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:'guest@example.com',name:'Impostor',password:'impostorpass123'})});
+ const attackerCookie=reg.headers.get('set-cookie').split(';')[0];
+ const list=await (await fetch(S.base+'/api/account/orders',{headers:{Cookie:attackerCookie}})).json();
+ assert.deepEqual(list.orders,[],'只凭邮箱注册不应看到别人的订单');
+ const access=await fetch(S.base+'/api/account/orders/'+encodeURIComponent(guestId)+'/access',{method:'POST',headers:{Cookie:attackerCookie}});
+ assert.equal(access.status,403);
+
+ // 用错误订单号绑定 -> 404
+ const bad=await fetch(S.base+'/api/account/link-order',{method:'POST',headers:{'Content-Type':'application/json',Cookie:attackerCookie},body:JSON.stringify({orderId:'MY000000000000000000'})});
+ assert.equal(bad.status,404);
+
+ // 用正确订单号 + 匹配邮箱绑定 -> 200，随后订单出现在列表里
+ const ok=await fetch(S.base+'/api/account/link-order',{method:'POST',headers:{'Content-Type':'application/json',Cookie:attackerCookie},body:JSON.stringify({orderId:guestId})});
+ assert.equal(ok.status,200);
+ const after=await (await fetch(S.base+'/api/account/orders',{headers:{Cookie:attackerCookie}})).json();
+ assert.equal(after.orders.length,1);
+ assert.equal(after.orders[0].id,guestId);
+
+ // 别人用不同邮箱绑定同一个订单 -> 403
+ const reg2=await fetch(S.base+'/api/auth/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:'someoneelse@example.com',name:'Other',password:'otherpass12345'})});
+ const otherCookie=reg2.headers.get('set-cookie').split(';')[0];
+ const stolen=await fetch(S.base+'/api/account/link-order',{method:'POST',headers:{'Content-Type':'application/json',Cookie:otherCookie},body:JSON.stringify({orderId:guestId})});
+ assert.equal(stolen.status,403);
 });

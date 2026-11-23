@@ -22,17 +22,24 @@ after(()=>{S.child.kill();rmSync(S.dir,{recursive:true,force:true});});
 const cookieOf=r=>{const raw=r.headers.get('set-cookie')||'';const m=raw.match(/mid=[a-f0-9]+/);return m?m[0]:'';};
 
 test('dashboard counts page views, unique visitors, product views, carts and orders',async()=>{
- // 同一个访客打开两次首页 → PV 2 / UV 1
- const first=await fetch(S.base+'/',{headers:{'User-Agent':'Mozilla/5.0 test'}});
- const mid=cookieOf(first);
- assert.ok(mid,'访问首页应下发访客 cookie');
- await first.text();
+ // 未同意前不种追踪 cookie（GDPR：先同意后追踪），也不记 PV
+ const anonView=await fetch(S.base+'/',{headers:{'User-Agent':'Mozilla/5.0 test'}});
+ assert.equal(cookieOf(anonView),'','未同意前不应下发访客 cookie');
+ await anonView.text();
+
+ // 同一个访客点「同意」后打开两次首页 → PV 2 / UV 1
+ const consent=await fetch(S.base+'/api/track',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind:'consent'})});
+ const mid=cookieOf(consent);
+ assert.ok(mid,'同意后应下发访客 cookie');
+ await consent.text();
+ await (await fetch(S.base+'/',{headers:{Cookie:mid}})).text();
  await (await fetch(S.base+'/',{headers:{Cookie:mid}})).text();
 
- // 另一个访客
- const second=await fetch(S.base+'/',{headers:{Referer:'https://www.google.com/search?q=watches'}});
- const mid2=cookieOf(second);
- await second.text();
+ // 另一个访客（已同意，从 Google 进来）
+ const consent2=await fetch(S.base+'/api/track',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind:'consent'})});
+ const mid2=cookieOf(consent2);
+ await consent2.text();
+ await (await fetch(S.base+'/',{headers:{Cookie:mid2,Referer:'https://www.google.com/search?q=watches'}})).text();
 
  // 商品浏览 / 加购埋点
  const track=(body,cookie)=>fetch(S.base+'/api/track',{method:'POST',headers:{'Content-Type':'application/json',Cookie:cookie||mid},body:JSON.stringify(body)});
