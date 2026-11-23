@@ -5,9 +5,9 @@ const linkText={en:{linkTitle:'Already ordered as a guest?',linkHelp:'Enter the 
 for(const l of ['en','de','es'])Object.assign(dictionaries[l],linkText[l]);
 for(const l of ['en','de','es']){Object.assign(dictionaries[l],paymentText[l]);dictionaries[l].notice=paymentText[l].payNotice;dictionaries[l].submit={en:'Create order & choose payment',de:'Bestellen und Zahlungsart wählen',es:'Crear pedido y elegir pago'}[l];}
 const cfgText={
- en:{quoteBtn:'Request a quotation',quoteTitle:'Request a quotation',quoteQty:'Quantity',quoteSend:'Send request',quoteThank:'Request received',quoteRef:'Reference',estimate:'Estimated total',quoteNotOrder:'This is a quotation request — nothing is charged and no stock is reserved.',quoteHint:'Dial colour, engraving text, delivery deadline…',engLabel:'Engraving',cfgRequired:'Required',cfgCode:'Configuration code',cfgCopy:'Copy',cfgInclude:'incl. options'},
- de:{quoteBtn:'Angebot anfragen',quoteTitle:'Angebot anfragen',quoteQty:'Menge',quoteSend:'Anfrage senden',quoteThank:'Anfrage erhalten',quoteRef:'Referenz',estimate:'Geschätzter Betrag',quoteNotOrder:'Dies ist eine Angebotsanfrage — keine Zahlung, keine Reservierung.',quoteHint:'Zifferblattfarbe, Gravurtext, Liefertermin…',engLabel:'Gravur',cfgRequired:'Pflicht',cfgCode:'Konfigurationscode',cfgCopy:'Kopieren',cfgInclude:'inkl. Optionen'},
- es:{quoteBtn:'Solicitar presupuesto',quoteTitle:'Solicitar presupuesto',quoteQty:'Cantidad',quoteSend:'Enviar solicitud',quoteThank:'Solicitud recibida',quoteRef:'Referencia',estimate:'Total estimado',quoteNotOrder:'Es una solicitud de presupuesto: no se cobra ni se reserva stock.',quoteHint:'Color de esfera, texto grabado, plazo de entrega…',engLabel:'Grabado',cfgRequired:'Obligatorio',cfgCode:'Código de configuración',cfgCopy:'Copiar',cfgInclude:'incl. opciones'}
+ en:{quoteBtn:'Request a quotation',quoteTitle:'Request a quotation',quoteQty:'Quantity',quoteSend:'Send request',quoteThank:'Request received',quoteRef:'Reference',estimate:'Estimated total',quoteNotOrder:'This is a quotation request — nothing is charged and no stock is reserved.',quoteHint:'Dial colour, engraving text, delivery deadline…',engLabel:'Engraving',czrEdit:'Resize & position',czrDone:'Done, show mock-up',czrConfirmed:'Mock-up generated — we produce exactly this',cfgRequired:'Required',cfgCode:'Configuration code',cfgCopy:'Copy',cfgInclude:'incl. options'},
+ de:{quoteBtn:'Angebot anfragen',quoteTitle:'Angebot anfragen',quoteQty:'Menge',quoteSend:'Anfrage senden',quoteThank:'Anfrage erhalten',quoteRef:'Referenz',estimate:'Geschätzter Betrag',quoteNotOrder:'Dies ist eine Angebotsanfrage — keine Zahlung, keine Reservierung.',quoteHint:'Zifferblattfarbe, Gravurtext, Liefertermin…',engLabel:'Gravur',czrEdit:'Größe & Position',czrDone:'Fertig, Vorschau',czrConfirmed:'Montage erzeugt — genau so wird produziert',cfgRequired:'Pflicht',cfgCode:'Konfigurationscode',cfgCopy:'Kopieren',cfgInclude:'inkl. Optionen'},
+ es:{quoteBtn:'Solicitar presupuesto',quoteTitle:'Solicitar presupuesto',quoteQty:'Cantidad',quoteSend:'Enviar solicitud',quoteThank:'Solicitud recibida',quoteRef:'Referencia',estimate:'Total estimado',quoteNotOrder:'Es una solicitud de presupuesto: no se cobra ni se reserva stock.',quoteHint:'Color de esfera, texto grabado, plazo de entrega…',engLabel:'Grabado',czrEdit:'Tamaño y posición',czrDone:'Listo, ver montaje',czrConfirmed:'Montaje generado — así se fabrica',cfgRequired:'Obligatorio',cfgCode:'Código de configuración',cfgCopy:'Copiar',cfgInclude:'incl. opciones'}
 };
 for(const l of ['en','de','es'])Object.assign(dictionaries[l],cfgText[l]);
 const contactText={en:'Chat with us',de:'Kontakt aufnehmen',es:'Chatea con nosotros'};
@@ -198,7 +198,7 @@ function paintPrice(p){
  const u=unitPrice(p,1),base=Number(p.price||0);
  const tier=tierAt(p,1);
  const cmp=Number(p.compareAt||0)>base?`<s>${money(p.compareAt)}</s> `:'';
- el.innerHTML=`${cmp}${money(u)}${u!==base?` <small class="cfg-unit-note">含选项加价</small>`:''}${engCfg(p)&&engTextOf(p)?` <small class="cfg-unit-note">+ 刻字 ${money(engFeeOf(p,1))}</small>`:''}`;
+ el.innerHTML=`${cmp}${money(u)}${u!==base?` <small class="cfg-unit-note">含选项加价</small>`:''}${artOf(p.id)?` <small class="cfg-unit-note">+ 定制图案 ${money(czFee())}</small>`:''}${engCfg(p)&&engTextOf(p)?` <small class="cfg-unit-note">+ 刻字 ${money(engFeeOf(p,1))}</small>`:''}`;
  const code=$('#cfg-code');if(code)code.textContent=configOf(p);
 }
 function wireConfig(p){
@@ -243,7 +243,7 @@ function customizerPanel(p){
   <div class="czr-zoom"><button type="button" data-zoom="-1" aria-label="−">−</button><output id="czr-val">${Math.round(a?a.size:34)}%</output><button type="button" data-zoom="1" aria-label="+">+</button></div>
   <label class="czr-range"><span>${t('czrSize')}</span><input type="range" id="czr-size" min="10" max="110" step="1" value="${a?a.size:34}"></label>
   <label class="czr-range"><span>${t('czrRotate')}</span><input type="range" id="czr-rot" min="-45" max="45" step="1" value="${a?(a.rot||0):0}"></label>
-  <div class="czr-acts"><button type="button" class="link" id="czr-fit">${t('czrFit')}</button><button type="button" class="link" id="czr-preview">${t('czrPreview')}</button><button type="button" class="link" id="czr-clear">${t('czrRemove')}</button></div>
+  <div class="czr-acts"><button type="button" class="link" id="czr-edit">${t('czrEdit')}</button><button type="button" class="link" id="czr-fit">${t('czrFit')}</button><button type="button" class="link" id="czr-preview">${t('czrPreview')}</button><button type="button" class="link" id="czr-clear">${t('czrRemove')}</button></div>
   <figure class="czr-shot" id="czr-shot" hidden><img alt=""><figcaption>${t('czrShot')}</figcaption></figure>
  </div></section>`;
 }
@@ -262,6 +262,47 @@ function paintArt(p){
  if(h){const ar=(layer.naturalHeight||1)/(layer.naturalWidth||1)||1;const half=(a.size??c.size)/2;
   h.hidden=false;h.style.left=(a.x??c.x)+half+'%';h.style.top=(a.y??c.y)+half*ar+'%';}
  if(!a.hidden){const h2=document.querySelector('#art-handle');if(!a)h2&&(h2.hidden=true);}
+}
+// 上传后进入的专注编辑态：大图 + 选框四角柄 + 底部工具栏（缩小/放大/Fit/微调/Done）
+function openArtEditor(p){
+ const a=art[p.id];if(!a||!p.image)return;
+ const dlg=document.createElement('dialog');dlg.className='art-editor';
+ dlg.innerHTML=`<div class="ae-head"><div><p class="eyebrow">${t('czrTitle')}</p><p class="muted small">${t('czrDrag')}</p></div><button type="button" class="ae-close" aria-label="${t('close')}">×</button></div>
+ <div class="ae-stage" id="ae-stage"><img class="ae-base" src="${esc(p.image)}" alt="${esc(localized(p,'name'))}"><div class="ae-box" id="ae-box"><img class="ae-art" id="ae-art" src="${esc(a.url)}" alt=""><span class="ae-h ae-nw" data-h="nw"></span><span class="ae-h ae-ne" data-h="ne"></span><span class="ae-h ae-sw" data-h="sw"></span><span class="ae-h ae-se" data-h="se"></span></div></div>
+ <div class="ae-tools"><button type="button" class="ae-round" data-az="-1" aria-label="−">−</button><button type="button" class="ae-round" data-az="1" aria-label="+">+</button><button type="button" class="ae-txt" data-afit>${t('czrFit')}</button><div class="ae-nudge">${[['-1,0','←'],['0,-1','↑'],['0,1','↓'],['1,0','→']].map(([v,l])=>`<button type="button" class="ae-round" data-nudge="${v}" aria-label="${l}">${l}</button>`).join('')}</div><button type="button" class="ae-done" id="ae-done">${t('czrDone')}</button></div>`;
+ document.body.append(dlg);document.body.style.overflow='hidden';dlg.showModal();
+ const stage=dlg.querySelector('#ae-stage'),box=dlg.querySelector('#ae-box'),artImg=dlg.querySelector('#ae-art');
+ const dims=()=>({w:stage.clientWidth||1,h:stage.clientHeight||1});
+ const clamp=(v,lo,hi)=>Math.min(hi,Math.max(lo,v));
+ const apply=()=>{box.style.width=(a.size??34)+'%';box.style.height='auto';box.style.left=(a.x??50)+'%';box.style.top=(a.y??50)+'%';box.style.transform=`translate(-50%,-50%) rotate(${a.rot||0}deg)`;};
+ const moveBy=(dxPct,dyPct)=>{a.x=clamp((a.x??50)+dxPct,0,100);a.y=clamp((a.y??50)+dyPct,0,100);apply();};
+ const zoomBy=(f)=>{a.size=Math.round(clamp((a.size??34)*f,4,160));apply();};
+ let drag=null;
+ box.addEventListener('pointerdown',e=>{if(e.target.dataset&&e.target.dataset.h)return;drag={mode:'move',x:e.clientX,y:e.clientY};box.setPointerCapture(e.pointerId);e.preventDefault();});
+ dlg.querySelectorAll('[data-h]').forEach(hd=>hd.addEventListener('pointerdown',e=>{drag={mode:'resize'};hd.setPointerCapture(e.pointerId);e.preventDefault();e.stopPropagation();}));
+ box.addEventListener('pointermove',e=>{
+  if(!drag)return;
+  const {w,h}=dims();
+  if(drag.mode==='move'){moveBy((e.clientX-drag.x)/w*100,(e.clientY-drag.y)/h*100);drag.x=e.clientX;drag.y=e.clientY;}
+  else{const r=box.getBoundingClientRect();const half=Math.max(8,Math.max(Math.abs(e.clientX-(r.left+r.width/2)),Math.abs(e.clientY-(r.top+r.height/2)))*2);a.size=Math.round(clamp(half/w*100,4,160));apply();}
+ });
+ box.addEventListener('pointerup',()=>{drag=null;});
+ box.addEventListener('pointercancel',()=>{drag=null;});
+ stage.addEventListener('wheel',e=>{e.preventDefault();zoomBy(e.deltaY<0?1.06:0.94);},{passive:false});
+ dlg.querySelectorAll('[data-az]').forEach(b=>b.onclick=()=>zoomBy(b.dataset.az==='1'?1.12:0.89));
+ dlg.querySelectorAll('[data-nudge]').forEach(b=>b.onclick=()=>{const [dx,dy]=b.dataset.nudge.split(',').map(Number);moveBy(dx*1,dy*1);});
+ dlg.querySelector('[data-afit]').onclick=()=>{const c=p.customizer||{x:50,y:50,size:34};a.x=c.x;a.y=c.y;a.size=c.size;a.rot=0;apply();};
+ const close=()=>{document.body.style.overflow='';if(dlg.open)dlg.close();dlg.remove();};
+ dlg.querySelector('.ae-close').onclick=close;
+ dlg.addEventListener('cancel',close);
+ dlg.querySelector('#ae-done').onclick=async()=>{
+  persistArt();invalidateShot(p);close();paintArt(p);
+  toast(t('czrWorking'));
+  paintPrice(p);
+  const url=await ensurePreview(p);
+  if(url){showShot(url);toast(t('czrConfirmed'));}else toast(t('czrNoShot'));
+ };
+ apply();
 }
 function wireCustomizer(p){
  const file=document.querySelector('#czr-file');if(!file)return;
@@ -284,6 +325,7 @@ function wireCustomizer(p){
    persistArt();tools&&(tools.hidden=false);if(size)size.value=art[p.id].size;paintArt(p);showVal();toast(t('czrDone'));
    document.querySelector('.czr-upload').firstChild.textContent=t('czrReplace');
    refreshShot(p);
+   openArtEditor(p);
   }catch(err){toast(err.message);}
  };
  if(size)size.oninput=commit;
@@ -295,6 +337,8 @@ function wireCustomizer(p){
   a.x=Math.min(100,Math.max(0,(a.x??50)+dx*2));a.y=Math.min(100,Math.max(0,(a.y??50)+dy*2));
   persistArt();paintArt(p);invalidateShot(p);
  });
+ const ed=document.querySelector('#czr-edit');
+ if(ed)ed.onclick=()=>openArtEditor(p);
  const fit=document.querySelector('#czr-fit');
  if(fit)fit.onclick=()=>{const a=art[p.id],c=p.customizer||{x:50,y:50,size:34};if(!a)return;a.x=c.x;a.y=c.y;a.size=c.size;a.rot=0;if(size)size.value=a.size;if(rot)rot.value=0;persistArt();paintArt(p);showVal();invalidateShot(p);};
  const pv=document.querySelector('#czr-preview');
@@ -587,7 +631,7 @@ function openLightbox(list,start=0){let i=start||0,scale=1;const box=document.cr
 async function add(id){const p=store.products.find(p=>p.id===id);if(p.locked)return vipNotice();if((cart[id]||0)>=p.stock)return toast(t('limit'));if(art[id]&&!art[id].preview)await ensurePreview(p);cart[id]=(cart[id]||0)+1;persist();toast(t('added'));track('addcart',id);}
 let buyNow=null;
 function openCart(){const items=Object.entries(cart).map(([id,q])=>({p:store.products.find(p=>p.id===id),q})).filter(x=>x.p);const total=items.reduce((a,x)=>a+(unitPrice(x.p,x.q)+lineFee(x.p))*x.q+engFeeOf(x.p,x.q),0);show(`<h2>${t('bag')} <small>(${items.length})</small></h2>${items.length?`${items.map(({p,q})=>`<div class="cart-item">${p.image?`<img src="${esc(p.image)}" loading="lazy" decoding="async" alt="${esc(localized(p,'name'))}">`:`<span class="img-placeholder" aria-hidden="true">${esc((localized(p,'name')||'M').slice(0,1).toUpperCase())}</span>`}<div><h3>${esc(localized(p,'name'))}${artOf(p.id)?` <span class="cz-badge"><img src="${esc(artOf(p.id).preview||artOf(p.id).url)}" alt=""> ${t('czrBadge')}</span>`:''}</h3><p>${money(unitPrice(p,q))}${lineFee(p)?` <span class="cz-fee">+ ${money(lineFee(p))} ${t('czrFeeLabel')}</span>`:''}${engFeeOf(p,q)?` <span class="cz-fee">+ ${money(engFeeOf(p,q))} ${t('engLabel')}</span>`:''}</p>${pickedOptions(p).length?`<p class="cart-opts">${pickedOptions(p).map(o=>`${esc(o.valueLabel)}${Number(o.delta)>0?` +${money(Number(o.delta))}`:''}`).join(' · ')}</p>`:''}${engTextOf(p)?`<p class="cart-opts">${t('engLabel')}: “${esc(engTextOf(p))}”</p>`:''}<div class="stepper"><button data-minus="${esc(p.id)}">−</button><span>${q}</span><button data-plus="${esc(p.id)}">＋</button><button data-remove="${esc(p.id)}">${t('remove')}</button></div></div></div>`).join('')}<div class="totals"><p>${t('subtotal')} <strong>${money(total)}</strong></p><p>${t('delivery')} <strong>${shipFor(total)?money(shipFor(total)):t('free')}</strong></p><p>${t('total')} <strong>${money(total+shipFor(total))}</strong></p></div><button class="button full" id="checkout">${t('checkout')} →</button>${items.some(x=>x.p.access==='vip')?`<p class="payment-review">${t('vipPayUsdt')}</p>`:''}<p class="muted">${t('notice')}</p>`:`<p class="empty">${t('bagEmpty')}</p>`}`);modal.querySelectorAll('[data-minus]').forEach(b=>b.onclick=()=>{if(--cart[b.dataset.minus]<=0)delete cart[b.dataset.minus];persist();openCart();});modal.querySelectorAll('[data-plus]').forEach(b=>b.onclick=()=>{add(b.dataset.plus);openCart();});modal.querySelectorAll('[data-remove]').forEach(b=>b.onclick=()=>{delete cart[b.dataset.remove];persist();openCart();});if($('#checkout'))$('#checkout').onclick=checkout;}
-function checkout(){const lines=(buyNow||Object.entries(cart).map(([id,quantity])=>({id,quantity}))).map(l=>{const p=store.products.find(x=>x.id===l.id);const extra={};if(art[l.id])extra.artwork={url:art[l.id].url,x:art[l.id].x,y:art[l.id].y,size:art[l.id].size,...(art[l.id].preview?{preview:art[l.id].preview}:{})};if(p&&pickedOptions(p).length)extra.options=pickedOptions(p).map(o=>({key:o.key,value:o.value}));const et=p?engTextOf(p):'';if(et)extra.engraving={text:et};return {...l,...extra};});const sum=lines.reduce((a,l)=>{const p=store.products.find(x=>x.id===l.id);if(!p)return a;return a+unitPrice(p,l.quantity)*l.quantity+(art[l.id]?czFee()*l.quantity:0)+engFeeOf(p,l.quantity);},0);show(`<h2>${t('checkout')}</h2>${buyNow?`<div class="buy-now-line"><span>${esc(localized(store.products.find(p=>p.id===buyNow[0].id)||{},'name'))}</span><strong>${money(sum)}</strong></div>`:''}<p class="muted">${t('guestNote')}</p><form id="order-form">
+async function checkout(){for(const id of Object.keys(art)){const p=store.products.find(x=>x.id===id);if(p&&art[id]&&!art[id].preview)await ensurePreview(p);}const lines=(buyNow||Object.entries(cart).map(([id,quantity])=>({id,quantity}))).map(l=>{const p=store.products.find(x=>x.id===l.id);const extra={};if(art[l.id])extra.artwork={url:art[l.id].url,x:art[l.id].x,y:art[l.id].y,size:art[l.id].size,...(art[l.id].preview?{preview:art[l.id].preview}:{})};if(p&&pickedOptions(p).length)extra.options=pickedOptions(p).map(o=>({key:o.key,value:o.value}));const et=p?engTextOf(p):'';if(et)extra.engraving={text:et};return {...l,...extra};});const sum=lines.reduce((a,l)=>{const p=store.products.find(x=>x.id===l.id);if(!p)return a;return a+unitPrice(p,l.quantity)*l.quantity+(art[l.id]?czFee()*l.quantity:0)+engFeeOf(p,l.quantity);},0);show(`<h2>${t('checkout')}</h2>${buyNow?`<div class="buy-now-line"><span>${esc(localized(store.products.find(p=>p.id===buyNow[0].id)||{},'name'))}</span><strong>${money(sum)}</strong></div>`:''}<p class="muted">${t('guestNote')}</p><form id="order-form">
 <label>${t('recipient')}<input name="name" required maxlength="200" autocomplete="name"></label>
 <label>${t('email')}<input name="email" type="email" required maxlength="200" autocomplete="email"></label>
 <label>${t('phone')}<input name="phone" type="tel" required maxlength="40" autocomplete="tel"></label>

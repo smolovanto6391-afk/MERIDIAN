@@ -492,3 +492,29 @@ body.has-cookie{padding-bottom:92px}
 .quote-card .qstatus{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
 .quote-card .qstatus button{border:1px solid var(--line);padding:5px 10px;font-size:11px;background:#fff}
 .quote-card .qstatus button.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+
+/* ---------- 图案编辑态（上传后：大图 + 选框 + 底部工具栏） ---------- */
+dialog.art-editor{width:min(1100px,calc(100vw - 24px));max-width:none;padding:0;background:#0f1211;color:#f2f1ec;max-height:calc(100vh - 24px);overflow:hidden}
+dialog.art-editor::backdrop{background:#000c;backdrop-filter:blur(6px)}
+.ae-head{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;padding:18px 22px 12px}
+.ae-head .eyebrow{color:#cdd6c8;margin:0 0 6px}
+.ae-head .muted{color:#9aa69a;margin:0;font-size:11px}
+.ae-close{color:#e8e6df;font-size:26px;line-height:1;padding:2px 6px}
+.ae-stage{position:relative;margin:0 22px;background:#fff;overflow:hidden;aspect-ratio:1/1;display:grid;place-items:center}
+.ae-stage .ae-base{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;pointer-events:none}
+.ae-box{position:absolute;cursor:move;touch-action:none;outline:1px solid #ffffff;box-shadow:0 0 0 1px #0006,0 6px 24px #0005}
+.ae-box .ae-art{display:block;width:100%;height:auto;pointer-events:none;user-select:none}
+.ae-h{position:absolute;width:14px;height:14px;background:#e8d9a8;border:1px solid #6d6244;border-radius:2px;touch-action:none}
+.ae-nw{left:-8px;top:-8px;cursor:nwse-resize}
+.ae-ne{right:-8px;top:-8px;cursor:nesw-resize}
+.ae-sw{left:-8px;bottom:-8px;cursor:nesw-resize}
+.ae-se{right:-8px;bottom:-8px;cursor:nwse-resize}
+.ae-tools{display:flex;align-items:center;gap:10px;padding:14px 22px 20px;flex-wrap:wrap}
+.ae-round{width:38px;height:38px;border-radius:50%;border:1px solid #3c4540;background:#1b201d;color:#eceae3;font-size:16px;display:grid;place-items:center}
+.ae-round:hover{background:#28302b}
+.ae-txt{padding:9px 16px;border:1px solid #3c4540;background:#1b201d;color:#eceae3;font-size:11px;letter-spacing:1.2px;text-transform:uppercase}
+.ae-nudge{display:flex;gap:6px;margin-left:6px}
+.ae-nudge .ae-round{width:34px;height:34px;font-size:13px}
+.ae-done{margin-left:auto;padding:11px 22px;background:#e8d9a8;border:1px solid #e8d9a8;color:#241f12;font-size:11px;letter-spacing:1.4px;text-transform:uppercase;font-weight:600}
+.ae-done:hover{filter:brightness(1.06)}
+@media(max-width:700px){.ae-tools{gap:8px}.ae-done{margin-left:0;width:100%}.ae-nudge{margin-left:0}}
