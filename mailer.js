@@ -98,6 +98,7 @@ ${details.note?`<div style="margin:0 0 18px;padding:12px 14px;background:#f7f5f0
     ...items.map((i) => [
       `${i.name} × ${i.quantity} — ${money((i.unitPrice ?? i.price) * i.quantity)}${i.artwork ? ` · artwork ${i.artwork.preview||i.artwork.url}` : ''}`,
       ...(Array.isArray(i.options) ? i.options.map((o) => `  ${o.label}: ${o.valueLabel}${Number(o.delta) > 0 ? ` (+${money(Number(o.delta))})` : ''}`) : []),
+      ...(i.printWarning ? [`  ⚠ Print risk: ${i.printWarning}`] : []),
       ...(i.logoMethod && i.logoMethod.id ? [`  Dial logo: ${i.logoMethod.label} (+${money(Number(i.logoMethod.fee || 0))} one-time)`] : []),
       ...(i.engraving && i.engraving.text ? [`  Engraving: "${i.engraving.text}" (+${money(Number(i.engraving.fee || 0))})`] : []),
       ...(i.config ? [`  CFG ${i.config}`] : []),

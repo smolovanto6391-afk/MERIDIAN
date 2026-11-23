@@ -1020,6 +1020,7 @@ const server=http.createServer(async(req,res)=>{
    ...(sel.length?{options:sel.map(s=>({key:s.key,label:s.label,value:s.value,valueLabel:s.valueLabel,delta:s.delta,...(s.image?{image:s.image}:{})}))}:{}),
    ...(priced.engraveText?{engraving:{text:priced.engraveText,fee:priced.engraveFeeCents/100,perUnit:Boolean(p.engraving&&p.engraving.perUnit)}}:{}),
    ...(priced.logoMethod?{logoMethod:priced.logoMethod}:{}),
+   ...(String(i.printWarning||'').trim()?{printWarning:String(i.printWarning).trim().slice(0,60)}:{}),
    config:code,
    image:(sel.find(s=>s.image)||{}).image||p.image||null,
    ...(artURL?{artwork:{url:artURL,x:clamp(art.x,50,0,100),y:clamp(art.y,50,0,100),size:clamp(art.size,34,5,120),rot:clamp(art.rot,0,-45,45),...(prevURL?{preview:prevURL,confirmedAt:new Date().toISOString()}:{})}}:{})};});

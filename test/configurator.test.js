@@ -195,4 +195,21 @@ test('configurator: options, tiers, engraving, config code and quotation', async
   const q2 = await r.json();
   assert.equal(r.status, 201, JSON.stringify(q2));
   assert.equal(q2.estimate, Number((170.1 * 10 + 5).toFixed(2)), 'quotation: tier price + one-time logo fee');
+  // 7. 印刷风险标记：随订单快照、超长截断、可选
+  r = await post('/api/orders', {
+    name: 'Print Risk', email: 'print@example.com', phone: '+1 617 555 0115',
+    address: '5 Ink Street', city: 'Boston', state: 'MA', postalCode: '02108', country: 'US',
+    items: [{ id: 'p1', quantity: 1, printWarning: 'low-contrast 100% ' + 'x'.repeat(200) }],
+  });
+  const pr = await r.json();
+  assert.equal(r.status, 201, JSON.stringify(pr));
+  assert.equal(pr.items[0].printWarning.length, 60, 'print warning truncated to 60 chars');
+
+  r = await post('/api/orders', {
+    name: 'No Risk', email: 'norisk@example.com', phone: '+1 617 555 0116',
+    address: '6 Ink Street', city: 'Boston', state: 'MA', postalCode: '02108', country: 'US',
+    items: [{ id: 'p1', quantity: 1 }],
+  });
+  const nr = await r.json();
+  assert.equal(nr.items[0].printWarning, undefined, 'no print warning when not flagged');
 });
