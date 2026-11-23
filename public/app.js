@@ -331,6 +331,11 @@ function openArtEditor(p){
   if(url){showShot(url);toast(t('czrConfirmed'));}else toast(t('czrNoShot'));
  };
  apply();
+ // 舞台固定 1:1 且给头部/工具栏留空间：横屏、矮屏也不会把 Done 挤出屏幕
+ const fitStage=()=>{const hh=dlg.querySelector('.ae-head').offsetHeight,th=dlg.querySelector('.ae-tools').offsetHeight;const avail=Math.max(140,Math.min(window.innerHeight-hh-th-28,window.innerWidth-36));stage.style.width=avail+'px';stage.style.height=avail+'px';apply();};
+ fitStage();
+ window.addEventListener('resize',fitStage);
+ dlg.addEventListener('close',()=>window.removeEventListener('resize',fitStage));
 }
 function wireCustomizer(p){
  const file=document.querySelector('#czr-file');if(!file)return;
